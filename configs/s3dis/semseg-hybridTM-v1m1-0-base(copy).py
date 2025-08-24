@@ -1,22 +1,20 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 8  # 根据您的GPU内存调整
-num_worker = 4
+batch_size = 12  # bs: total bs in all gpus
+num_worker = 24
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
-find_unused_parameters = True
-
 
 # model settings
 model = dict(
     type="DefaultSegmentorV2",
-    num_classes=3,
+    num_classes=13,
     backbone_out_channels=64,
     backbone=dict(
         type="hybridTM-v1m1-0",
-        in_channels=9,
+        in_channels=6,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -55,7 +53,7 @@ model = dict(
 )
 
 # scheduler settings
-epoch = 100
+epoch = 3000
 optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
 scheduler = dict(
     type="OneCycleLR",
@@ -68,16 +66,30 @@ scheduler = dict(
 param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
-dataset_type = "MyDataset"
-data_root = "autodl-tmp/data/data_s3dis_pointNeXt"
+dataset_type = "S3DISDataset"
+data_root = "data/s3dis"
 
 data = dict(
-    num_classes=3,
+    num_classes=13,
     ignore_index=-1,
-    names=["class_0", "class_1", "class_2"],
+    names=[
+        "ceiling",
+        "floor",
+        "wall",
+        "beam",
+        "column",
+        "window",
+        "door",
+        "table",
+        "chair",
+        "sofa",
+        "bookcase",
+        "board",
+        "clutter",
+    ],
     train=dict(
         type=dataset_type,
-        split="train",
+        split=("Area_1", "Area_2", "Area_3", "Area_4", "Area_6"),
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
@@ -121,7 +133,7 @@ data = dict(
     ),
     val=dict(
         type=dataset_type,
-        split="val",
+        split="Area_5",
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
@@ -156,7 +168,7 @@ data = dict(
     ),
     test=dict(
         type=dataset_type,
-        split="test",
+        split="Area_5",
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),

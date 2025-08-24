@@ -10,6 +10,8 @@ from .scannet_pair import ScanNetPairDataset
 from .arkitscenes import ArkitScenesDataset
 from .structure3d import Structured3DDataset
 
+from .my_dataset import MyDataset
+
 # outdoor scene
 from .semantic_kitti import SemanticKITTIDataset
 from .nuscenes import NuScenesDataset
