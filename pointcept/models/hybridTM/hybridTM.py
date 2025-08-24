@@ -503,7 +503,7 @@ class HybridTMBlock(PointModule):
         point.sparse_conv_feat.replace_feature(point.feat)
         return point
 
-@MODELS.register_module("hybridTM-v1m1-0")
+@MODELS.register_module()
 class HybridTM(PointModule):
     def __init__(
         self,
