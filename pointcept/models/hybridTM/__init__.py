@@ -1,1 +1,1 @@
-from hybridTM import * 
+from .hybridTM import *
