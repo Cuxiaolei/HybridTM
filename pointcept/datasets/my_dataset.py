@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from torch.utils.data import Dataset
-import deepcopy
+from copy import deepcopy
 
 
 class MyDataset(Dataset):
