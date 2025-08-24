@@ -69,7 +69,7 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
 dataset_type = "MyDataset"
-data_root = "autodl-tmp/data/data_s3dis_pointNeXt"
+data_root = "/root/autodl-tmp/data/data_s3dis_pointNeXt"
 
 data = dict(
     num_classes=3,
