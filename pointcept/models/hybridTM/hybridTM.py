@@ -268,70 +268,92 @@ class MambaBlock(PointModule):
         self.drop_path = PointSequential(
             DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         )
-    
+
     @torch.no_grad()
     def get_padding_and_inverse(self, point):
         pad_key = "pad_mamba"
         unpad_key = "unpad_mamba"
         cu_seqlens_key = "cu_seqlens_key_mamba"
         if (
-            pad_key not in point.keys()
-            or unpad_key not in point.keys()
-            or cu_seqlens_key not in point.keys()
+                pad_key not in point.keys()
+                or unpad_key not in point.keys()
+                or cu_seqlens_key not in point.keys()
         ):
             offset = point.offset
             bincount = offset2bincount(offset)
             bincount_pad = (
-                torch.div(
-                    bincount + self.patch_size - 1,
-                    self.patch_size,
-                    rounding_mode="trunc",
-                )
-                * self.patch_size
+                    torch.div(
+                        bincount + self.patch_size - 1,
+                        self.patch_size,
+                        rounding_mode="trunc",
+                    )
+                    * self.patch_size
             )
-            # only pad point when num of points larger than patch_size
-            # mask_pad = torch.tensor([True for _ in range(bincount.shape[0])], device=bincount.device)# bincount > self.patch_size
-            # bincount_pad = ~mask_pad * bincount + mask_pad * bincount_pad
             _offset = nn.functional.pad(offset, (1, 0))
             _offset_pad = nn.functional.pad(torch.cumsum(bincount_pad, dim=0), (1, 0))
             pad = torch.arange(_offset_pad[-1], device=offset.device)
             unpad = torch.arange(_offset[-1], device=offset.device)
             cu_seqlens = []
+
+            # 遍历每个分组，处理padding逻辑
             for i in range(len(offset)):
-                unpad[_offset[i] : _offset[i + 1]] += _offset_pad[i] - _offset[i]
-                if bincount[i] != bincount_pad[i]:
-                    
-                    pad[
-                        _offset_pad[i + 1] - self.patch_size + (bincount[i] % self.patch_size) : _offset_pad[i + 1]
-                    ] = pad[
-                        _offset_pad[i + 1]
-                        - 2 * self.patch_size
-                        + (bincount[i] % self.patch_size) : _offset_pad[i + 1]
-                        - self.patch_size
-                    ] if (_offset_pad[i + 1] - _offset_pad[i]) - self.patch_size != 0 else \
-                        unpad[_offset[i]: _offset[i+1]].repeat(
-                            (_offset_pad[i + 1] - _offset_pad[i]) // bincount[i] + 1)[
-                                : self.patch_size - (bincount[i] % self.patch_size)
+                unpad[_offset[i]: _offset[i + 1]] += _offset_pad[i] - _offset[i]
+                bincount_val = bincount[i]  # 当前分组的点数量
+                patch_size = self.patch_size  # Mamba的patch大小
+                group_offset_diff = _offset_pad[i + 1] - _offset_pad[i]  # 当前分组的偏移差
+
+                if bincount_val != bincount_pad[i]:
+                    # 情况1：分组点数量与pad后的数量不相等（正常分组）
+                    if (group_offset_diff - patch_size) != 0:
+                        pad[
+                        _offset_pad[i + 1] - patch_size + (bincount_val % patch_size): _offset_pad[i + 1]
+                        ] = pad[
+                            _offset_pad[i + 1] - 2 * patch_size + (bincount_val % patch_size): _offset_pad[
+                                                                                                   i + 1] - patch_size
                             ]
-                    
-                pad[_offset_pad[i] : _offset_pad[i + 1]] -= _offset_pad[i] - _offset[i]
-                
+                    else:
+                        # 情况2：偏移差等于patch_size（需处理除零）
+                        # 关键修改1：检查bincount_val是否为0，避免除零
+                        if bincount_val == 0:
+                            # 空分组处理：生成默认padding（避免除零和空tensor错误）
+                            print(f"Warning: Group {i} has bincount=0 (empty group), using default padding")
+                            # 生成与所需长度匹配的零tensor（设备与unpad一致）
+                            required_len = patch_size - (0 % patch_size)  # bincount=0时，需补全整个patch_size
+                            pad_slice = torch.zeros(required_len, dtype=unpad.dtype, device=unpad.device)
+                        else:
+                            # 正常非空分组：按原逻辑计算，但确保分母非零
+                            repeat_times = (group_offset_diff // bincount_val) + 1
+                            # 计算需要截取的长度（避免mod操作异常）
+                            slice_len = patch_size - (bincount_val % patch_size)
+                            # 生成padding用的tensor
+                            pad_slice = unpad[_offset[i]: _offset[i + 1]].repeat(repeat_times)[:slice_len]
+
+                        # 将处理后的padding赋值到pad tensor
+                        pad[
+                        _offset_pad[i + 1] - patch_size + (bincount_val % patch_size): _offset_pad[i + 1]
+                        ] = pad_slice
+
+                # 调整pad的偏移
+                pad[_offset_pad[i]: _offset_pad[i + 1]] -= _offset_pad[i] - _offset[i]
+
+                # 生成当前分组的cu_seqlens
                 cu_seqlens.append(
                     torch.arange(
                         _offset_pad[i],
                         _offset_pad[i + 1],
-                        step=self.patch_size,
+                        step=patch_size,
                         dtype=torch.int32,
                         device=offset.device,
                     )
                 )
+
+            # 保存结果到point字典
             point[pad_key] = pad
             point[unpad_key] = unpad
             point[cu_seqlens_key] = nn.functional.pad(
                 torch.concat(cu_seqlens), (0, 1), value=_offset_pad[-1]
             )
         return point[pad_key], point[unpad_key], point[cu_seqlens_key]
-      
     def forward(self, point: Point):
         if self.with_pre_cpe:
             shortcut = point.feat
