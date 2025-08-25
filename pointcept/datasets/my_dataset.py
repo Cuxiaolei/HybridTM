@@ -3,7 +3,7 @@ import numpy as np
 from torch.utils.data import Dataset
 from copy import deepcopy
 from .builder import DATASETS
-
+from .transform import Compose
 @DATASETS.register_module()
 class MyDataset(Dataset):
     def __init__(self,
@@ -17,7 +17,7 @@ class MyDataset(Dataset):
                  color_normalize=True):  # 是否归一化颜色
         self.split = split
         self.data_root = data_root
-        self.transform = transform
+        self.transform = Compose(transform)
         self.test_mode = test_mode
         self.ignore_index = ignore_index
         self.loop = loop if not test_mode else 1  # 测试时不循环
