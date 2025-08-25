@@ -394,7 +394,16 @@ class SemSegTester(TesterBase):
 
     @staticmethod
     def collate_fn(batch):
-        return collate_fn(batch)
+        """
+        针对性处理两种场景：
+        1. 处理test_loader的批次数据：返回列表（单一场景的完整数据，包含fragment_list）
+        2. 处理fragment_list的碎片数据：返回单个字典（供模型输入）
+        """
+        # 如果batch是碎片数据（每个元素是单个碎片的字典，且batch长度为1）
+        if len(batch) == 1 and isinstance(batch[0], dict) and "fragment_list" not in batch[0]:
+            return batch[0]  # 返回单个碎片字典，供模型输入
+        else:
+            return batch  # 场景批次数据保持列表结构
 
 
 @TESTERS.register_module()
