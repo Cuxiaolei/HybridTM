@@ -250,7 +250,7 @@ class Trainer(TrainerBase):
             train_data,
             batch_size=self.cfg.batch_size_per_gpu,
             shuffle=(train_sampler is None),
-            num_workers=self.cfg.num_worker_per_gpu,
+            num_workers=self.cfg.num_worker,
             sampler=train_sampler,
             collate_fn=partial(point_collate_fn, mix_prob=self.cfg.mix_prob),
             pin_memory=True,
