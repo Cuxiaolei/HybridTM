@@ -77,6 +77,13 @@ class MyDataset(Dataset):
         # 加载点云数据 (10个通道: 坐标3 + 颜色3 + 法向量3 + 标签1)
         data = np.load(full_path).astype(np.float32)
 
+        # 关键：限制单样本最大点数量（根据内存调整，建议先设20万）
+        MAX_POINTS = 200000  # 可逐步增大测试（如30万、50万）
+        if len(data) > MAX_POINTS:
+            # 随机采样固定数量的点（避免内存超限）
+            indices = np.random.choice(len(data), MAX_POINTS, replace=False)
+            data = data[indices]  # 裁剪点云
+
         # 解析数据（保持原始字段分离）
         coord = data[:, :3]  # 坐标
         color = data[:, 3:6]  # 颜色（单独保留）
