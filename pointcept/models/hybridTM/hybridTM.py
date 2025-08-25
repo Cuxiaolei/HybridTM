@@ -244,13 +244,8 @@ class MambaBlock(PointModule):
             )
         
         self.norm1 = PointSequential(norm_layer(channels))
-        self.mamba = Mamba(
-            d_model=channels,  # 核心：用 d_model 表示输入维度（1.0.1 真实支持）
-            d_state=16,  # 真实参数列表中存在，保留
-            d_conv=4,  # 真实参数列表中存在，保留
-            expand=2,  # 真实参数列表中存在，保留
-            use_fast_path=True  # 真实参数列表中存在，保留
-        )
+        self.mamba = Mamba(channels, bidirectional=True, d_state=16, d_conv=4, expand=2, use_fast_path=True, causal_conv1d=True, extra_conv=True, concate_output=False)
+
         self.with_ffn = with_ffn
         if self.with_ffn:
             self.norm2 = PointSequential(norm_layer(channels))
@@ -611,6 +606,7 @@ class HybridTM(PointModule):
                         stride=stride[s - 1],
                         norm_layer=bn_layer,
                         act_layer=act_layer,
+                        indice_key=f"enc_stage{s}",
                     ),
                     name="down",
                 )
