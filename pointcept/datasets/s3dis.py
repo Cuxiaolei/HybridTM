@@ -22,23 +22,37 @@ class S3DISDataset(DefaultDataset):  # 自定义类名，避免与原有冲突
         return [os.path.join(self.data_root, scene) for scene in scenes]
 
     def load_data(self, idx):
-        """加载单文件.npy，解析6特征+1标签"""
         scene_path = self.data_list[idx]
         if not os.path.exists(scene_path):
             raise FileNotFoundError(f"点云文件不存在: {scene_path}")
-        
-        # 加载数据（假设shape为(N, 7)：3坐标 + 3特征 + 1标签）
+
+        # 加载10通道数据（3坐标 + 3特征 + 3法向量 + 1标签）
         data = np.load(scene_path).astype(np.float32)
-        
-        # 解析数据（根据你的实际维度调整索引！）
-        coord = data[:, :3]  # 前3维：x, y, z坐标
-        feat = data[:, 3:6]  # 中间3维：其他特征（如颜色/反射率等）
-        segment = data[:, 6].astype(np.int32)  # 最后1维：标签（0/1/2）
-        
-        # 返回字典必须包含这些键（与transform和模型匹配）
+
+        # 解析数据（根据10通道顺序调整索引）
+        coord = data[:, :3]  # 前3维：坐标
+        color = data[:, 3:6]  # 3-5维：特征（如颜色）
+        normal = data[:, 6:9]  # 6-8维：法向量
+        segment = data[:, 9].astype(np.int32)  # 第9维：标签
+
+        # 坐标归一化：将坐标缩放到[0, 1]范围
+        coord_min = np.min(coord, axis=0)
+        coord_max = np.max(coord, axis=0)
+        coord_range = coord_max - coord_min
+        # 避免除以零
+        coord_range[coord_range == 0] = 1.0
+        coord = (coord - coord_min) / coord_range
+
+        # 法向量归一化：单位化法向量
+        normal_norm = np.linalg.norm(normal, axis=1, keepdims=True)
+        # 避免除以零
+        normal_norm[normal_norm == 0] = 1.0
+        normal = normal / normal_norm
+
         return {
             "coord": coord,
-            "feat": feat,
+            "color": color,
+            "normal": normal,  # 新增法向量字段
             "segment": segment,
             "scene_name": os.path.basename(scene_path).replace(".npy", "")
         }
