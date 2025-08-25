@@ -125,20 +125,6 @@ class ScanNetDataset(DefaultDataset):
                 data_dict["coord"] = data_dict["coord"] / max_dist
             # print(f"  [坐标归一化] 完成，处理后坐标范围：{data_dict['coord'].min(axis=0)} ~ {data_dict['coord'].max(axis=0)}")
 
-        # --------------------------
-        # 新增：法向量归一化（转为单位向量）
-        # 确保法向量模长为1，统一方向特征尺度
-        # --------------------------
-        if "normal" in data_dict:
-            # 计算每个法向量的模长
-            norm = np.linalg.norm(data_dict["normal"], axis=1, keepdims=True)
-            # 避免除以0（模长接近0时，保留原始值）
-            norm = np.where(norm < 1e-6, 1e-6, norm)
-            # 归一化为单位向量
-            data_dict["normal"] = data_dict["normal"] / norm
-            # 验证：打印部分法向量的模长（应接近1）
-            sample_norm = np.mean(np.linalg.norm(data_dict["normal"][:100], axis=1))  # 采样前100个验证
-            # print(f"  [法向量归一化] 完成，采样法向量平均模长：{sample_norm:.4f}（目标：1.0）")
 
         # --------------------------
         # 原有逻辑：数据类型转换 + 标签处理
