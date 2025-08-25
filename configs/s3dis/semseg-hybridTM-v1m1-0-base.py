@@ -104,7 +104,7 @@ data = dict(
                 return_grid_coord=True,  # 生成网格坐标，适配模型输入
             ),
             dict(type="SphereCrop", sample_rate=0.6, mode="random"),  # 随机裁剪（控制点数）
-            dict(type="SphereCrop", point_max=60000, mode="random"),  # 限制最大点数（防显存溢出）
+            dict(type="SphereCrop", point_max=10000, mode="random"),  # 限制最大点数（防显存溢出）
             dict(type="CenterShift", apply_z=False),  # 二次中心化（微调坐标）
             dict(type="NormalizeColor"),  # 颜色归一化（将RGB映射到0-1范围）
 
