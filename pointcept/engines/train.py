@@ -164,7 +164,6 @@ class Trainer(TrainerBase):
         if not os.path.exists(train_csv_path) or self.start_epoch == 0:
             with open(train_csv_path, 'w', newline='') as f:
                 writer = csv.writer(f)
-                # 表头：epoch + 每个类别的IoU + 每个类别的准确率 + mIoU + OA
                 header = ['epoch']
                 for cls in self.class_names:
                     header.append(f"{cls}_iou")
@@ -172,13 +171,17 @@ class Trainer(TrainerBase):
                     header.append(f"{cls}_acc")
                 header.extend(['mIoU', 'OA'])
                 writer.writerow(header)
+            # 添加日志：确认训练CSV创建成功
+            self.logger.info(f"已创建训练指标CSV文件，路径：{train_csv_path}")
+        else:
+            # 添加日志：如果CSV已存在
+            self.logger.info(f"训练指标CSV文件已存在，路径：{train_csv_path}")
 
-        # 验证指标CSV
+        # 验证指标CSV（同上）
         val_csv_path = os.path.join(self.metrics_dir, "val_metrics.csv")
         if not os.path.exists(val_csv_path) or self.start_epoch == 0:
             with open(val_csv_path, 'w', newline='') as f:
                 writer = csv.writer(f)
-                # 表头：epoch + 每个类别的IoU + 每个类别的准确率 + mIoU + OA
                 header = ['epoch']
                 for cls in self.class_names:
                     header.append(f"{cls}_iou")
@@ -186,6 +189,9 @@ class Trainer(TrainerBase):
                     header.append(f"{cls}_acc")
                 header.extend(['mIoU', 'OA'])
                 writer.writerow(header)
+            self.logger.info(f"已创建验证指标CSV文件，路径：{val_csv_path}")
+        else:
+            self.logger.info(f"验证指标CSV文件已存在，路径：{val_csv_path}")
 
     def _compute_metrics(self, predictions, targets, num_classes):
         """
@@ -228,35 +234,28 @@ class Trainer(TrainerBase):
     def _save_metrics_to_csv(self, epoch, metrics, is_train=True):
         """将指标保存到CSV文件"""
         if not comm.is_main_process():
+            # 添加日志：非主进程不写入
+            self.logger.debug(f"非主进程（rank={comm.get_rank()}），跳过CSV写入")
             return
 
         csv_path = os.path.join(self.metrics_dir, "train_metrics.csv" if is_train else "val_metrics.csv")
+        # 添加日志：确认主进程开始写入
+        self.logger.info(f"主进程：开始写入{'训练' if is_train else '验证'}指标到CSV，路径：{csv_path}")
 
         with open(csv_path, 'a', newline='') as f:
             writer = csv.writer(f)
             row = [epoch]
-
-            # 添加每个类别的IoU
             for i in range(self.num_classes):
                 row.append(metrics['iou'][i])
-
-            # 添加每个类别的准确率
             for i in range(self.num_classes):
                 row.append(metrics['acc'][i])
-
-            # 添加mIoU和OA
             row.append(metrics['miou'])
             row.append(metrics['oa'])
-
             writer.writerow(row)
 
-        # 同时将指标写入日志
-        log_str = f"{'Train' if is_train else 'Val'} Epoch {epoch} Metrics: "
-        log_str += f"mIoU: {metrics['miou']:.4f}, OA: {metrics['oa']:.4f}, "
-        log_str += "IoUs: " + ", ".join([f"{self.class_names[i]}: {metrics['iou'][i]:.4f}" for i in range(min(5, self.num_classes))])
-        if self.num_classes > 5:
-            log_str += ", ..."  # 避免日志过长
-        self.logger.info(log_str)
+        # 添加日志：写入完成
+        self.logger.info(
+            f"主进程：{'训练' if is_train else '验证'}指标已写入CSV，epoch={epoch}，mIoU={metrics['miou']:.4f}")
 
     def train(self):
         with EventStorage() as self.storage, ExceptionWriter():
@@ -292,57 +291,90 @@ class Trainer(TrainerBase):
                     # => after_step
                     self.after_step()
 
-                    # 收集训练预测和目标
+                    # 收集训练预测和目标（原代码位置）
                     if 'pred' in self.comm_info["model_output_dict"] and 'segment' in self.comm_info["input_dict"]:
+                        # 添加日志：确认找到预测和标签键
+                        self.logger.debug(
+                            f"Epoch {self.epoch}, Iter {self.comm_info['iter']}: 找到'pred'和'segment'键，开始收集数据")
                         self.train_predictions.append(self.comm_info["model_output_dict"]['pred'].detach())
                         self.train_targets.append(self.comm_info["input_dict"]['segment'])
+                    else:
+                        # 添加日志：未找到键时提示（仅在首轮epoch打印，避免冗余）
+                        if self.epoch == 0 and self.comm_info["iter"] == 0:
+                            if 'pred' not in self.comm_info["model_output_dict"]:
+                                self.logger.warning(
+                                    f"模型输出中未找到'pred'键，当前输出键：{list(self.comm_info['model_output_dict'].keys())}")
+                            if 'segment' not in self.comm_info["input_dict"]:
+                                self.logger.warning(
+                                    f"输入数据中未找到'segment'键，当前输入键：{list(self.comm_info['input_dict'].keys())}")
 
-                # 计算并保存训练集指标
+                # 计算并保存训练集指标（原代码位置）
                 if self.train_predictions and self.train_targets:
+                    # 添加日志：确认收集到的数据量
+                    self.logger.info(f"Epoch {self.epoch}：共收集到{len(self.train_predictions)}个批次的训练预测数据")
                     all_preds = torch.cat(self.train_predictions, dim=0)
                     all_targets = torch.cat(self.train_targets, dim=0)
+                    self.logger.debug(
+                        f"Epoch {self.epoch}：拼接后预测数据形状：{all_preds.shape}，标签数据形状：{all_targets.shape}")
 
                     # 忽略无效标签
                     valid_mask = all_targets != self.cfg.data.ignore_index
                     all_preds = all_preds[valid_mask]
                     all_targets = all_targets[valid_mask]
-
-                    if all_preds.numel() > 0:  # 确保有有效数据
-                        train_metrics = self._compute_metrics(all_preds, all_targets, self.num_classes)
-                        self._save_metrics_to_csv(self.epoch, train_metrics, is_train=True)
+                    self.logger.info(f"Epoch {self.epoch}：过滤无效标签后，有效样本数：{all_preds.numel()}")
 
                 # 验证并计算验证集指标
+                # 验证并计算验证集指标（原代码位置）
                 if self.val_loader is not None:
                     self.model.eval()
                     val_predictions = []
                     val_targets = []
+                    self.logger.info(f"Epoch {self.epoch}：开始验证，验证集批次总数：{len(self.val_loader)}")
 
                     with torch.no_grad():
-                        for val_input in self.val_loader:
-                            # 将数据移至GPU
+                        for val_idx, val_input in enumerate(self.val_loader):
+                            # 数据移至GPU
                             for key in val_input.keys():
                                 if isinstance(val_input[key], torch.Tensor):
                                     val_input[key] = val_input[key].cuda(non_blocking=True)
 
                             # 模型推理
                             val_output = self.model(val_input)
+                            # 添加日志：检查验证集预测和标签键
+                            if 'pred' not in val_output:
+                                self.logger.warning(
+                                    f"验证集批次 {val_idx}：模型输出中未找到'pred'键，当前输出键：{list(val_output.keys())}")
+                            if 'segment' not in val_input:
+                                self.logger.warning(
+                                    f"验证集批次 {val_idx}：输入数据中未找到'segment'键，当前输入键：{list(val_input.keys())}")
+
                             if 'pred' in val_output and 'segment' in val_input:
                                 val_predictions.append(val_output['pred'])
                                 val_targets.append(val_input['segment'])
 
                     # 计算并保存验证集指标
                     if val_predictions and val_targets:
+                        self.logger.info(f"Epoch {self.epoch}：共收集到{len(val_predictions)}个批次的验证预测数据")
                         all_val_preds = torch.cat(val_predictions, dim=0)
                         all_val_targets = torch.cat(val_targets, dim=0)
+                        self.logger.debug(
+                            f"Epoch {self.epoch}：验证集拼接后预测形状：{all_val_preds.shape}，标签形状：{all_val_targets.shape}")
 
-                        # 忽略无效标签
                         val_valid_mask = all_val_targets != self.cfg.data.ignore_index
                         all_val_preds = all_val_preds[val_valid_mask]
                         all_val_targets = all_val_targets[val_valid_mask]
+                        self.logger.info(f"Epoch {self.epoch}：验证集有效样本数：{all_val_preds.numel()}")
 
-                        if all_val_preds.numel() > 0:  # 确保有有效数据
+                        if all_val_preds.numel() > 0:
                             val_metrics = self._compute_metrics(all_val_preds, all_val_targets, self.num_classes)
                             self._save_metrics_to_csv(self.epoch, val_metrics, is_train=False)
+                        else:
+                            self.logger.warning(f"Epoch {self.epoch}：验证集有效样本数为0，跳过指标计算")
+                    else:
+                        self.logger.warning(f"Epoch {self.epoch}：未收集到任何验证预测/标签数据")
+                else:
+                    # 添加日志：验证集未初始化
+                    self.logger.info(f"Epoch {self.epoch}：未初始化验证集（self.val_loader为None）")
 
                 # => after epoch
                 self.after_epoch()
