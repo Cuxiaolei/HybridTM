@@ -2,9 +2,9 @@ _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
 batch_size = 2  # 根据您的GPU内存调整
-num_worker = 1
+num_worker = 0
 mix_prob = 0.8
-empty_cache = False
+empty_cache = True
 enable_amp = True
 find_unused_parameters = True
 
