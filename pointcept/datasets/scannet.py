@@ -90,10 +90,10 @@ class ScanNetDataset(DefaultDataset):
 
     def get_data(self, idx):
         # 新增调试日志：验证数据加载
-        print(f"\n[get_data] 加载第 {idx} 个样本")
+        # print(f"\n[get_data] 加载第 {idx} 个样本")
         data_path = self.data_list[idx % len(self.data_list)]
-        print(f"  数据路径: {data_path}")
-        print(f"  路径是否存在: {os.path.exists(data_path)}")
+        # print(f"  数据路径: {data_path}")
+        # print(f"  路径是否存在: {os.path.exists(data_path)}")
 
         name = self.get_data_name(idx)
         if self.cache:
@@ -103,7 +103,7 @@ class ScanNetDataset(DefaultDataset):
         data_dict = {}
         try:
             assets = os.listdir(data_path)
-            print(f"  场景文件夹下的文件: {assets}")  # 打印文件夹内的文件
+            # print(f"  场景文件夹下的文件: {assets}")  # 打印文件夹内的文件
         except Exception as e:
             print(f"  读取文件夹失败: {str(e)}")
             return data_dict
@@ -115,7 +115,7 @@ class ScanNetDataset(DefaultDataset):
                 continue
             try:
                 data_dict[asset[:-4]] = np.load(os.path.join(data_path, asset))
-                print(f"  成功加载: {asset}，shape: {data_dict[asset[:-4]].shape}")
+                # print(f"  成功加载: {asset}，shape: {data_dict[asset[:-4]].shape}")
             except Exception as e:
                 print(f"  加载 {asset} 失败: {str(e)}")
 
