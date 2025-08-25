@@ -484,17 +484,28 @@ class Trainer(TrainerBase):
         for key in input_dict.keys():
             if isinstance(input_dict[key], torch.Tensor):
                 input_dict[key] = input_dict[key].cuda(non_blocking=True)
+
+        # 关键修复：训练模式下额外执行一次前向传播获取seg_logits
         with torch.cuda.amp.autocast(enabled=self.cfg.enable_amp):
+            # 第一次前向传播：获取损失（原逻辑）
             output_dict = self.model(input_dict)
-            # 修复：训练时确保输出包含'seg_logits'（根据模型结构调整路径）
-            if self.model.training and 'seg_logits' not in output_dict:
-                # 示例：假设logits存储在模型的seg_head中（需替换为实际路径）
-                if hasattr(self.model, 'module'):  # 分布式训练
-                    seg_logits = self.model.module.seg_head.logits  # 替换为实际属性名
-                else:
-                    seg_logits = self.model.seg_head.logits  # 替换为实际属性名
-                output_dict['seg_logits'] = seg_logits
             loss = output_dict["loss"]
+
+            # 第二次前向传播（仅训练模式）：获取seg_logits
+            if self.model.training:
+                # 禁用梯度计算以节省内存
+                with torch.no_grad():
+                    # 切换为评估模式执行一次前向传播，获取seg_logits
+                    self.model.eval()
+                    val_output = self.model(input_dict)
+                    # 将seg_logits添加到训练输出中
+                    if 'seg_logits' in val_output:
+                        output_dict['seg_logits'] = val_output['seg_logits']
+                    else:
+                        self.logger.warning("训练模式下，评估模式的输出也没有'seg_logits'键")
+                    # 切回训练模式
+                    self.model.train()
+
         self.optimizer.zero_grad()
         if self.cfg.enable_amp:
             self.scaler.scale(loss).backward()
