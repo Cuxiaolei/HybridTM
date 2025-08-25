@@ -2,8 +2,9 @@ import os
 import numpy as np
 from torch.utils.data import Dataset
 from copy import deepcopy
+from .builder import DATASETS
 
-
+@DATASETS.register_module()
 class MyDataset(Dataset):
     def __init__(self,
                  split,

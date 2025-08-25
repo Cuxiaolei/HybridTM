@@ -652,9 +652,6 @@ class HybridTM(PointModule):
                     ),
                     name=f"block{i}",
                 )
-                print(f"mamba_patch_size 元组值: {self.mamba_patch_size}")
-                print(f"mamba_patch_size 元组长度: {len(self.mamba_patch_size)}")
-                print(f"当前索引 s 的值: {s}")
             if len(enc) != 0:
                 self.enc.add(module=enc, name=f"enc{s}")
 
