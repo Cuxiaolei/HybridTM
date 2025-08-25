@@ -98,7 +98,7 @@ class TesterBase:
         test_loader = torch.utils.data.DataLoader(
             test_dataset,
             batch_size=self.cfg.batch_size_test_per_gpu,
-            shuffle=False,
+            shuffle=True,
             num_workers=self.cfg.batch_size_test_per_gpu,
             pin_memory=True,
             sampler=test_sampler,

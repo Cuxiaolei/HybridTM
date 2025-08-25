@@ -446,9 +446,9 @@ class Trainer(TrainerBase):
                 val_sampler = None
             val_loader = torch.utils.data.DataLoader(
                 val_data,
-                batch_size=self.cfg.batch_size_val_per_gpu,
-                shuffle=False,
-                num_workers=self.cfg.num_worker_per_gpu,
+                batch_size=self.cfg.batch_size,
+                shuffle=True,
+                num_workers=self.cfg.num_worker,
                 pin_memory=True,
                 sampler=val_sampler,
                 collate_fn=collate_fn,
@@ -477,8 +477,8 @@ class MultiDatasetTrainer(Trainer):
         train_data = build_dataset(self.cfg.data.train)
         train_loader = MultiDatasetDataloader(
             train_data,
-            self.cfg.batch_size_per_gpu,
-            self.cfg.num_worker_per_gpu,
+            self.cfg.batch_size,
+            self.cfg.num_worker,
             self.cfg.mix_prob,
             self.cfg.seed,
         )
