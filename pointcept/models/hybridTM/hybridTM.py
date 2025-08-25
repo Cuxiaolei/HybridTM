@@ -250,7 +250,7 @@ class MambaBlock(PointModule):
             d_state=16,
             d_conv=4,
             expand=2,
-            use_fast_path=True  # 2.x 版本支持该参数，保留
+            use_fast_path=False  # 2.x 版本支持该参数，保留
         )
         self.with_ffn = with_ffn
         if self.with_ffn:
@@ -478,7 +478,7 @@ class HybridTMBlock(PointModule):
                 d_state=16,  # 支持的参数
                 d_conv=4,  # 支持的参数
                 expand=2,  # 支持的参数
-                use_fast_path=True  # 支持的参数
+                use_fast_path=False  # 支持的参数
             )
             self.norm3 = PointSequential(norm_layer(channels))
         elif self.with_mamba and not self.global_mamba:
