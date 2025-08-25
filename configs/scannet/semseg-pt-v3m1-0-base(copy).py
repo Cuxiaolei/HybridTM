@@ -1,16 +1,16 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 3  # bs: total bs in all gpus
-num_worker = 0
+batch_size = 12  # bs: total bs in all gpus
+num_worker = 24
 mix_prob = 0.8
-empty_cache = True
+empty_cache = False
 enable_amp = True
 
 # model settings
 model = dict(
     type="DefaultSegmentorV2",
-    num_classes=3,
+    num_classes=20,
     backbone_out_channels=64,
     backbone=dict(
         type="PT-v3m1",
@@ -52,7 +52,7 @@ model = dict(
 )
 
 # scheduler settings
-epoch = 100
+epoch = 800
 optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
 scheduler = dict(
     type="OneCycleLR",
@@ -66,12 +66,33 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
 dataset_type = "ScanNetDataset"
-data_root = "/root/autodl-tmp/data/data_scannet_tower"
+data_root = "data/scannet"
 
 data = dict(
     num_classes=20,
     ignore_index=-1,
-    names=["class_0", "class_1", "class_2"],
+    names=[
+        "wall",
+        "floor",
+        "cabinet",
+        "bed",
+        "chair",
+        "sofa",
+        "table",
+        "door",
+        "window",
+        "bookshelf",
+        "picture",
+        "counter",
+        "desk",
+        "curtain",
+        "refridgerator",
+        "shower curtain",
+        "toilet",
+        "sink",
+        "bathtub",
+        "otherfurniture",
+    ],
     train=dict(
         type=dataset_type,
         split="train",
@@ -102,7 +123,7 @@ data = dict(
                 mode="train",
                 return_grid_coord=True,
             ),
-            dict(type="SphereCrop", point_max=10000, mode="random"),
+            dict(type="SphereCrop", point_max=102400, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             # dict(type="ShufflePoint"),
@@ -167,7 +188,7 @@ data = dict(
                     feat_keys=("color", "normal"),
                 ),
             ],
-            # aug_transform=[
+                        # aug_transform=[
             #     [
             #         dict(
             #             type="RandomRotateTargetAngle",
