@@ -6,7 +6,7 @@ PYTHON=python
 
 TRAIN_CODE=train.py
 
-DATASET=scannet
+DATASET=my_dataset
 CONFIG="None"
 EXP_NAME=debug
 WEIGHT="None"

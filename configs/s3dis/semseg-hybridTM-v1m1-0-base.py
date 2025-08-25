@@ -68,7 +68,7 @@ scheduler = dict(
 param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
-dataset_type = "MyDataset"
+dataset_type = "S3DISDataset"
 data_root = "/root/autodl-tmp/data/data_s3dis_pointNeXt"
 
 data = dict(
