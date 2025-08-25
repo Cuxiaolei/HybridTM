@@ -524,7 +524,7 @@ class HybridTM(PointModule):
         dec_channels=(64, 64, 128, 256),
         dec_num_head=(4, 4, 8, 16),
         dec_patch_size=(48, 48, 48, 48),
-        mamba_patch_size=(4096, 4096, 4096, 4096),
+        mamba_patch_size=(4096, 4096, 4096, 4096, 4096),
         mlp_ratio=4,
         qkv_bias=True,
         qk_scale=None,
@@ -550,6 +550,7 @@ class HybridTM(PointModule):
         self.order = [order] if isinstance(order, str) else order
         self.cls_mode = cls_mode
         self.shuffle_orders = shuffle_orders
+        self.mamba_patch_size = mamba_patch_size
 
         assert self.num_stages == len(stride) + 1
         assert self.num_stages == len(enc_depths)
