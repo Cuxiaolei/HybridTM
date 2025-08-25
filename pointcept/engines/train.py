@@ -248,15 +248,15 @@ class Trainer(TrainerBase):
 
         train_loader = torch.utils.data.DataLoader(
             train_data,
-            batch_size=self.cfg.batch_size_per_gpu,
+            batch_size=self.cfg.batch_size,
             shuffle=(train_sampler is None),
-            num_workers=self.cfg.num_worker_per_gpu,
+            num_workers=self.cfg.num_worker,
             sampler=train_sampler,
             collate_fn=partial(point_collate_fn, mix_prob=self.cfg.mix_prob),
-            pin_memory=True,
+            pin_memory=False,
             worker_init_fn=init_fn,
             drop_last=True,
-            persistent_workers=True,
+            persistent_workers=False,
         )
         return train_loader
 
