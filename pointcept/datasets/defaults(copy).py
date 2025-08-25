@@ -7,10 +7,9 @@ Please cite our work if the code is helpful to you.
 
 import os
 import glob
-import json
-from re import split
-
 import numpy as np
+import torch
+import copy
 from copy import deepcopy
 from torch.utils.data import Dataset
 from collections.abc import Sequence
@@ -68,64 +67,66 @@ class DefaultDataset(Dataset):
         self.data_list = self.get_data_list()
         logger = get_root_logger()
         logger.info(
-            "Totally {} x {} samples in {} {} set.".format(
-                len(self.data_list), self.loop, os.path.basename(self.data_root), split
+            "Totally {} x {} samples in {} set.".format(
+                len(self.data_list), self.loop, split
             )
         )
 
     def get_data_list(self):
         if isinstance(self.split, str):
-            split_list = [self.split]
+            data_list = glob.glob(os.path.join(self.data_root, self.split, "*"))
         elif isinstance(self.split, Sequence):
-            split_list = self.split
+            data_list = []
+            for split in self.split:
+                data_list += glob.glob(os.path.join(self.data_root, split, "*"))
         else:
             raise NotImplementedError
-
-        data_list = []
-        for split in split_list:
-            if os.path.isfile(os.path.join(self.data_root, split)):
-                with open(os.path.join(self.data_root, split)) as f:
-                    data_list += [
-                        os.path.join(self.data_root, data) for data in json.load(f)
-                    ]
-            else:
-                # 新逻辑：直接收集 split 目录下的所有 .npy 文件
-                data_list += glob.glob(os.path.join(self.data_root, split, "*.npy"))
         return data_list
 
     def get_data(self, idx):
         data_path = self.data_list[idx % len(self.data_list)]
         name = self.get_data_name(idx)
-        split = self.get_split_name(idx)
         if self.cache:
             cache_name = f"pointcept-{name}"
             return shared_dict(cache_name)
 
-        # 加载10通道.npy文件（x, y, z, r, g, b, nx, ny, nz, label）
-        data = np.load(data_path).astype(np.float32)
-
-        # 解析数据（根据10通道顺序调整索引）
-        data_dict = {
-            "coord": data[:, :3].astype(np.float32),  # 前3列：坐标
-            "color": data[:, 3:6].astype(np.float32) / 255.0,  # 3-5列：颜色（归一化）
-            "normal": data[:, 6:9].astype(np.float32),  # 6-8列：法向量
-            "segment": data[:, 9].astype(np.int32)  # 第9列：标签
-        }
-
-        # 补充必要字段
+        data_dict = {}
+        assets = os.listdir(data_path)
+        for asset in assets:
+            if not asset.endswith(".npy"):
+                continue
+            if asset[:-4] not in self.VALID_ASSETS:
+                continue
+            data = np.load(os.path.join(data_path, asset))
+            data_dict[asset[:-4]] = copy.deepcopy(data)
         data_dict["name"] = name
-        data_dict["split"] = split
-        data_dict["instance"] = np.ones(data_dict["coord"].shape[0], dtype=np.int32) * -1
 
+        if "coord" in data_dict.keys():
+            data_dict["coord"] = data_dict["coord"].astype(np.float32)
+
+        if "color" in data_dict.keys():
+            data_dict["color"] = data_dict["color"].astype(np.float32)
+
+        if "normal" in data_dict.keys():
+            data_dict["normal"] = data_dict["normal"].astype(np.float32)
+
+        if "segment" in data_dict.keys():
+            data_dict["segment"] = data_dict["segment"].reshape([-1]).astype(np.int32)
+        else:
+            data_dict["segment"] = (
+                np.ones(data_dict["coord"].shape[0], dtype=np.int32) * -1
+            )
+
+        if "instance" in data_dict.keys():
+            data_dict["instance"] = data_dict["instance"].reshape([-1]).astype(np.int32)
+        else:
+            data_dict["instance"] = (
+                np.ones(data_dict["coord"].shape[0], dtype=np.int32) * -1
+            )
         return data_dict
 
     def get_data_name(self, idx):
-        return os.path.splitext(os.path.basename(self.data_list[idx % len(self.data_list)]))[0]
-
-    def get_split_name(self, idx):
-        return os.path.basename(
-            os.path.dirname(self.data_list[idx % len(self.data_list)])
-        )
+        return os.path.basename(self.data_list[idx % len(self.data_list)])
 
     def prepare_train_data(self, idx):
         # load data
@@ -195,8 +196,7 @@ class ConcatDataset(Dataset):
         for i in range(len(self.datasets)):
             data_list.extend(
                 zip(
-                    np.ones(len(self.datasets[i]), dtype=int) * i,
-                    np.arange(len(self.datasets[i])),
+                    np.ones(len(self.datasets[i])) * i, np.arange(len(self.datasets[i]))
                 )
             )
         return data_list
