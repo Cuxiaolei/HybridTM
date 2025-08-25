@@ -300,9 +300,9 @@ data = dict(
             #     ],
             #     [dict(type="RandomFlip", p=1)],
             # ],
-            # aug_transform=[
-            #     [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
-            # ],
+            aug_transform=[
+                [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
+            ],
         ),
     ),
 )
