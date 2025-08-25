@@ -253,7 +253,7 @@ class Trainer(TrainerBase):
             num_workers=self.cfg.num_worker,
             sampler=train_sampler,
             collate_fn=partial(point_collate_fn, mix_prob=self.cfg.mix_prob),
-            pin_memory=False,
+            pin_memory=True,
             worker_init_fn=init_fn,
             drop_last=True,
             persistent_workers=False,
