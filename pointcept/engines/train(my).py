@@ -232,8 +232,10 @@ class Trainer(TrainerBase):
 
         if comm.get_world_size() > 1:
             train_sampler = torch.utils.data.distributed.DistributedSampler(train_data)
+            print("------------------------------------------------------shuffle = False")
         else:
             train_sampler = None
+            print("------------------------------------------------------shuffle = True")
 
         init_fn = (
             partial(
