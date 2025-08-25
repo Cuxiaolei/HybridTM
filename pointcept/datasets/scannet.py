@@ -114,17 +114,17 @@ class ScanNetDataset(DefaultDataset):
         # 新增：坐标归一化（复用 NormalizeCoord 逻辑）
         # 步骤：1. 中心化（减均值） 2. 标准化（除以最大距离）
         # --------------------------
-        if "coord" in data_dict:
-            # 1. 坐标中心化（消除绝对位置偏差）
-            centroid = np.mean(data_dict["coord"], axis=0)
-            data_dict["coord"] -= centroid
-            # 坐标标准化（统一尺度，最大距离为1）
-            max_dist = np.max(np.sqrt(np.sum(data_dict["coord"] ** 2, axis=1)))
-            # 避免除以0（若所有点重合，max_dist为0，不执行标准化）
-            if max_dist > 1e-6:
-                data_dict["coord"] = data_dict["coord"] / max_dist
-            # print(f"  [坐标归一化] 完成，处理后坐标范围：{data_dict['coord'].min(axis=0)} ~ {data_dict['coord'].max(axis=0)}")
-
+        # if "coord" in data_dict:
+        #     # 1. 坐标中心化（消除绝对位置偏差）
+        #     centroid = np.mean(data_dict["coord"], axis=0)
+        #     data_dict["coord"] -= centroid
+        #     # 坐标标准化（统一尺度，最大距离为1）
+        #     max_dist = np.max(np.sqrt(np.sum(data_dict["coord"] ** 2, axis=1)))
+        #     # 避免除以0（若所有点重合，max_dist为0，不执行标准化）
+        #     if max_dist > 1e-6:
+        #         data_dict["coord"] = data_dict["coord"] / max_dist
+        #     # print(f"  [坐标归一化] 完成，处理后坐标范围：{data_dict['coord'].min(axis=0)} ~ {data_dict['coord'].max(axis=0)}")
+        #
 
         # --------------------------
         # 原有逻辑：数据类型转换 + 标签处理
