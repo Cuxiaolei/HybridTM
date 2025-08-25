@@ -133,6 +133,21 @@ class Trainer(TrainerBase):
         self.logger.info("=> Building hooks ...")
         self.register_hooks(self.cfg.hooks)
 
+        # 添加模型结构调试
+        self.logger.info("\n===== 模型结构调试信息 =====")
+        self.logger.info("模型完整结构:")
+        self.logger.info(self.model)  # 打印模型完整结构
+
+        # 测试模型输出（关键：检测训练/验证模式下的输出键）
+        self._debug_model_outputs()
+
+        # 检测输入数据的键名（确认标签键）
+        self._debug_input_keys()
+
+        # 打印无效标签值
+        self.logger.info(f"\n配置中的无效标签值(ignore_index): {self.cfg.data.ignore_index}")
+        self.logger.info("===========================\n")
+
         # 初始化指标存储和CSV文件
         self.num_classes = cfg.data.num_classes
         self.class_names = cfg.data.names if hasattr(cfg.data, 'names') else [f"class_{i}" for i in range(self.num_classes)]
@@ -143,6 +158,106 @@ class Trainer(TrainerBase):
 
         # 初始化CSV文件
         self._init_metrics_csv()
+
+    def _debug_model_outputs(self):
+        """调试模型在训练和验证模式下的输出键"""
+        self.logger.info("\n=== 模型输出键调试 ===")
+
+        # 创建测试输入（模拟真实数据的结构）
+        test_input = self._create_test_input()
+        if not test_input:
+            self.logger.warning("无法创建测试输入，跳过模型输出调试")
+            return
+
+        # 测试训练模式下的输出
+        self.model.train()  # 切换到训练模式
+        with torch.no_grad():
+            train_output = self.model(test_input)
+        self.logger.info(f"训练模式下模型输出键: {list(train_output.keys())}")
+
+        # 测试验证模式下的输出
+        self.model.eval()  # 切换到验证模式
+        with torch.no_grad():
+            val_output = self.model(test_input)
+        self.logger.info(f"验证模式下模型输出键: {list(val_output.keys())}")
+
+        # 尝试找到logits可能的存储位置
+        self.logger.info("\n=== 可能的logits存储位置 ===")
+        self._find_possible_logits()
+
+    def _create_test_input(self):
+        """创建模拟输入数据，用于测试模型输出"""
+        try:
+            # 从数据加载器获取一个批次的真实数据
+            if hasattr(self, 'train_loader'):
+                test_batch = next(iter(self.train_loader))
+                # 转换为模型需要的格式并移至GPU
+                input_dict = {}
+                for key, val in test_batch.items():
+                    if isinstance(val, torch.Tensor):
+                        input_dict[key] = val.cuda(non_blocking=True)
+                    else:
+                        input_dict[key] = val
+                self.logger.info(f"输入数据包含的键: {list(input_dict.keys())}")
+                return input_dict
+            else:
+                return None
+        except Exception as e:
+            self.logger.warning(f"创建测试输入失败: {str(e)}")
+            return None
+
+    def _find_possible_logits(self):
+        """自动检测模型中可能存储logits的属性"""
+        # 检查模型的顶层属性
+        possible_logits = []
+        model_to_check = self.model.module if hasattr(self.model, 'module') else self.model
+
+        # 检查第一层属性
+        for attr in dir(model_to_check):
+            if 'logit' in attr.lower() or 'output' in attr.lower() or 'pred' in attr.lower():
+                attr_val = getattr(model_to_check, attr)
+                if isinstance(attr_val, torch.Tensor):
+                    possible_logits.append(
+                        f"self.model.{'module.' if hasattr(self.model, 'module') else ''}{attr} (形状: {attr_val.shape})")
+
+        # 检查常见的子模块
+        for submodule_name in ['seg_head', 'head', 'decoder', 'classifier', 'output_layer']:
+            if hasattr(model_to_check, submodule_name):
+                submodule = getattr(model_to_check, submodule_name)
+                for attr in dir(submodule):
+                    if 'logit' in attr.lower() or 'output' in attr.lower() or 'pred' in attr.lower():
+                        attr_val = getattr(submodule, attr)
+                        if isinstance(attr_val, torch.Tensor):
+                            possible_logits.append(
+                                f"self.model.{'module.' if hasattr(self.model, 'module') else ''}{submodule_name}.{attr} (形状: {attr_val.shape})"
+                            )
+
+        if possible_logits:
+            self.logger.info("检测到可能的logits存储位置:")
+            for idx, path in enumerate(possible_logits, 1):
+                self.logger.info(f"  {idx}. {path}")
+        else:
+            self.logger.warning("未检测到明显的logits存储位置，请手动查看模型结构")
+
+    def _debug_input_keys(self):
+        """调试输入数据中的键名，确认标签键"""
+        self.logger.info("\n=== 输入数据键调试 ===")
+        try:
+            if hasattr(self, 'train_loader'):
+                test_batch = next(iter(self.train_loader))
+                input_keys = list(test_batch.keys())
+                self.logger.info(f"输入数据包含的键: {input_keys}")
+
+                # 猜测可能的标签键
+                label_candidates = ['segment', 'label', 'target', 'mask']
+                found_labels = [k for k in input_keys if k in label_candidates]
+                if found_labels:
+                    self.logger.info(f"可能的标签键（用于替换'segment'）: {found_labels}")
+                else:
+                    self.logger.warning("未找到明显的标签键，请根据业务逻辑确认")
+        except Exception as e:
+            self.logger.warning(f"调试输入键失败: {str(e)}")
+
 
     def _init_metrics_csv(self):
         """初始化训练和验证指标的CSV文件并写入表头"""
@@ -179,31 +294,44 @@ class Trainer(TrainerBase):
             self.logger.info(f"验证指标CSV文件已存在，路径：{val_csv_path}")
 
     def _compute_metrics(self, predictions, targets, num_classes):
-        """计算每个类别的IoU、准确率，以及mIoU和OA"""
-        # 计算混淆矩阵
-        confusion_matrix = torch.zeros((num_classes, num_classes), device=predictions.device)
-        for p, t in zip(predictions, targets):
-            confusion_matrix[p, t] += 1
+        """优化：向量化计算混淆矩阵，解决验证速度慢问题"""
+        # 展平预测和目标为一维张量
+        predictions = predictions.view(-1).long()
+        targets = targets.view(-1).long()
 
-        # 计算每个类别的IoU
+        # 过滤无效标签
+        valid_mask = (targets != self.cfg.data.ignore_index) & (predictions < num_classes)
+        predictions = predictions[valid_mask]
+        targets = targets[valid_mask]
+
+        if len(predictions) == 0:
+            return {
+                'iou': np.zeros(num_classes),
+                'acc': np.zeros(num_classes),
+                'miou': 0.0,
+                'oa': 0.0
+            }
+
+        # 向量化计算混淆矩阵（核心优化）
+        idx = targets * num_classes + predictions
+        confusion_matrix = torch.bincount(idx, minlength=num_classes ** 2).view(num_classes, num_classes)
+
+        # 分布式聚合
+        confusion_matrix = comm.all_reduce(confusion_matrix, op="sum")
+
+        # 计算指标
         iou = torch.diag(confusion_matrix) / (
-            confusion_matrix.sum(dim=1) + confusion_matrix.sum(dim=0) - torch.diag(confusion_matrix) + 1e-10
+                confusion_matrix.sum(dim=1) + confusion_matrix.sum(dim=0) - torch.diag(confusion_matrix) + 1e-10
         )
-
-        # 计算每个类别的准确率
         acc = torch.diag(confusion_matrix) / (confusion_matrix.sum(dim=1) + 1e-10)
-
-        # 计算mIoU (mean Intersection over Union)
-        miou = iou.mean()
-
-        # 计算OA (Overall Accuracy)
-        oa = torch.diag(confusion_matrix).sum() / (confusion_matrix.sum() + 1e-10)
+        miou = iou.mean().item()
+        oa = torch.diag(confusion_matrix).sum().item() / (confusion_matrix.sum().item() + 1e-10)
 
         return {
             'iou': iou.cpu().numpy(),
             'acc': acc.cpu().numpy(),
-            'miou': miou.item(),
-            'oa': oa.item()
+            'miou': miou,
+            'oa': oa
         }
 
     def _save_metrics_to_csv(self, epoch, metrics, is_train=True):
@@ -358,13 +486,19 @@ class Trainer(TrainerBase):
                 input_dict[key] = input_dict[key].cuda(non_blocking=True)
         with torch.cuda.amp.autocast(enabled=self.cfg.enable_amp):
             output_dict = self.model(input_dict)
+            # 修复：训练时确保输出包含'seg_logits'（根据模型结构调整路径）
+            if self.model.training and 'seg_logits' not in output_dict:
+                # 示例：假设logits存储在模型的seg_head中（需替换为实际路径）
+                if hasattr(self.model, 'module'):  # 分布式训练
+                    seg_logits = self.model.module.seg_head.logits  # 替换为实际属性名
+                else:
+                    seg_logits = self.model.seg_head.logits  # 替换为实际属性名
+                output_dict['seg_logits'] = seg_logits
             loss = output_dict["loss"]
         self.optimizer.zero_grad()
         if self.cfg.enable_amp:
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
-
-            # 修复torch警告：scheduler step在optimizer step之前
             scaler = self.scaler.get_scale()
             self.scaler.update()
             if scaler <= self.scaler.get_scale():
@@ -375,7 +509,7 @@ class Trainer(TrainerBase):
             self.scheduler.step()
         if self.cfg.empty_cache:
             torch.cuda.empty_cache()
-        self.comm_info["model_output_dict"] = output_dict  # 确保模型输出被正确存储
+        self.comm_info["model_output_dict"] = output_dict  # 确保包含'seg_logits'
 
     def after_epoch(self):
         for h in self.hooks:
