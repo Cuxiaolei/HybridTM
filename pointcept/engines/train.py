@@ -12,8 +12,6 @@ import torch
 import torch.nn as nn
 import torch.utils.data
 from functools import partial
-import csv
-from collections import defaultdict
 
 if sys.version_info >= (3, 10):
     from collections.abc import Iterator
@@ -52,22 +50,34 @@ class TrainerBase:
         hooks = build_hooks(hooks)
         for h in hooks:
             assert isinstance(h, HookBase)
+            # To avoid circular reference, hooks and trainer cannot own each other.
+            # This normally does not matter, but will cause memory leak if the
+            # involved objects contain __del__:
+            # See http://engineering.hearsaysocial.com/2013/06/16/circular-references-in-python/
             h.trainer = weakref.proxy(self)
         self.hooks.extend(hooks)
 
     def train(self):
         with EventStorage() as self.storage:
+            # => before train
             self.before_train()
             for self.epoch in range(self.start_epoch, self.max_epoch):
+                # => before epoch
                 self.before_epoch()
+                # => run_epoch
                 for (
                     self.comm_info["iter"],
                     self.comm_info["input_dict"],
                 ) in self.data_iterator:
+                    # => before_step
                     self.before_step()
+                    # => run_step
                     self.run_step()
+                    # => after_step
                     self.after_step()
+                # => after epoch
                 self.after_epoch()
+            # => after train
             self.after_train()
 
     def before_train(self):
@@ -95,6 +105,7 @@ class TrainerBase:
         self.storage.reset_histories()
 
     def after_train(self):
+        # Sync GPU before running train hooks
         comm.synchronize()
         for h in self.hooks:
             h.after_train()
@@ -133,383 +144,51 @@ class Trainer(TrainerBase):
         self.logger.info("=> Building hooks ...")
         self.register_hooks(self.cfg.hooks)
 
-        # 添加模型结构调试
-        self.logger.info("\n===== 模型结构调试信息 =====")
-        self.logger.info("模型完整结构:")
-        self.logger.info(self.model)  # 打印模型完整结构
-
-        # 测试模型输出（关键：检测训练/验证模式下的输出键）
-        self._debug_model_outputs()
-
-        # 检测输入数据的键名（确认标签键）
-        self._debug_input_keys()
-
-        # 打印无效标签值
-        self.logger.info(f"\n配置中的无效标签值(ignore_index): {self.cfg.data.ignore_index}")
-        self.logger.info("===========================\n")
-
-        # 初始化指标存储和CSV文件
-        self.num_classes = cfg.data.num_classes
-        self.class_names = cfg.data.names if hasattr(cfg.data, 'names') else [f"class_{i}" for i in range(self.num_classes)]
-
-        # 创建保存指标的目录
-        self.metrics_dir = os.path.join(cfg.save_path, "metrics")
-        os.makedirs(self.metrics_dir, exist_ok=True)
-
-        # 初始化CSV文件
-        self._init_metrics_csv()
-
-    def _debug_model_outputs(self):
-        """调试模型在训练和验证模式下的输出键"""
-        self.logger.info("\n=== 模型输出键调试 ===")
-
-        # 创建测试输入（模拟真实数据的结构）
-        test_input = self._create_test_input()
-        if not test_input:
-            self.logger.warning("无法创建测试输入，跳过模型输出调试")
-            return
-
-        # 测试训练模式下的输出
-        self.model.train()  # 切换到训练模式
-        with torch.no_grad():
-            train_output = self.model(test_input)
-        self.logger.info(f"训练模式下模型输出键: {list(train_output.keys())}")
-
-        # 测试验证模式下的输出
-        self.model.eval()  # 切换到验证模式
-        with torch.no_grad():
-            val_output = self.model(test_input)
-        self.logger.info(f"验证模式下模型输出键: {list(val_output.keys())}")
-
-        # 尝试找到logits可能的存储位置
-        self.logger.info("\n=== 可能的logits存储位置 ===")
-        self._find_possible_logits()
-
-    def _create_test_input(self):
-        """创建模拟输入数据，用于测试模型输出"""
-        try:
-            # 从数据加载器获取一个批次的真实数据
-            if hasattr(self, 'train_loader'):
-                test_batch = next(iter(self.train_loader))
-                # 转换为模型需要的格式并移至GPU
-                input_dict = {}
-                for key, val in test_batch.items():
-                    if isinstance(val, torch.Tensor):
-                        input_dict[key] = val.cuda(non_blocking=True)
-                    else:
-                        input_dict[key] = val
-                self.logger.info(f"输入数据包含的键: {list(input_dict.keys())}")
-                return input_dict
-            else:
-                return None
-        except Exception as e:
-            self.logger.warning(f"创建测试输入失败: {str(e)}")
-            return None
-
-    def _find_possible_logits(self):
-        """自动检测模型中可能存储logits的属性"""
-        # 检查模型的顶层属性
-        possible_logits = []
-        model_to_check = self.model.module if hasattr(self.model, 'module') else self.model
-
-        # 检查第一层属性
-        for attr in dir(model_to_check):
-            if 'logit' in attr.lower() or 'output' in attr.lower() or 'pred' in attr.lower():
-                attr_val = getattr(model_to_check, attr)
-                if isinstance(attr_val, torch.Tensor):
-                    possible_logits.append(
-                        f"self.model.{'module.' if hasattr(self.model, 'module') else ''}{attr} (形状: {attr_val.shape})")
-
-        # 检查常见的子模块
-        for submodule_name in ['seg_head', 'head', 'decoder', 'classifier', 'output_layer']:
-            if hasattr(model_to_check, submodule_name):
-                submodule = getattr(model_to_check, submodule_name)
-                for attr in dir(submodule):
-                    if 'logit' in attr.lower() or 'output' in attr.lower() or 'pred' in attr.lower():
-                        attr_val = getattr(submodule, attr)
-                        if isinstance(attr_val, torch.Tensor):
-                            possible_logits.append(
-                                f"self.model.{'module.' if hasattr(self.model, 'module') else ''}{submodule_name}.{attr} (形状: {attr_val.shape})"
-                            )
-
-        if possible_logits:
-            self.logger.info("检测到可能的logits存储位置:")
-            for idx, path in enumerate(possible_logits, 1):
-                self.logger.info(f"  {idx}. {path}")
-        else:
-            self.logger.warning("未检测到明显的logits存储位置，请手动查看模型结构")
-
-    def _debug_input_keys(self):
-        """调试输入数据中的键名，确认标签键"""
-        self.logger.info("\n=== 输入数据键调试 ===")
-        try:
-            if hasattr(self, 'train_loader'):
-                test_batch = next(iter(self.train_loader))
-                input_keys = list(test_batch.keys())
-                self.logger.info(f"输入数据包含的键: {input_keys}")
-
-                # 猜测可能的标签键
-                label_candidates = ['segment', 'label', 'target', 'mask']
-                found_labels = [k for k in input_keys if k in label_candidates]
-                if found_labels:
-                    self.logger.info(f"可能的标签键（用于替换'segment'）: {found_labels}")
-                else:
-                    self.logger.warning("未找到明显的标签键，请根据业务逻辑确认")
-        except Exception as e:
-            self.logger.warning(f"调试输入键失败: {str(e)}")
-
-
-    def _init_metrics_csv(self):
-        """初始化训练和验证指标的CSV文件并写入表头"""
-        # 训练指标CSV
-        train_csv_path = os.path.join(self.metrics_dir, "train_metrics.csv")
-        if not os.path.exists(train_csv_path) or self.start_epoch == 0:
-            with open(train_csv_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                header = ['epoch']
-                for cls in self.class_names:
-                    header.append(f"{cls}_iou")
-                for cls in self.class_names:
-                    header.append(f"{cls}_acc")
-                header.extend(['mIoU', 'OA'])
-                writer.writerow(header)
-            self.logger.info(f"已创建训练指标CSV文件，路径：{train_csv_path}")
-        else:
-            self.logger.info(f"训练指标CSV文件已存在，路径：{train_csv_path}")
-
-        # 验证指标CSV
-        val_csv_path = os.path.join(self.metrics_dir, "val_metrics.csv")
-        if not os.path.exists(val_csv_path) or self.start_epoch == 0:
-            with open(val_csv_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                header = ['epoch']
-                for cls in self.class_names:
-                    header.append(f"{cls}_iou")
-                for cls in self.class_names:
-                    header.append(f"{cls}_acc")
-                header.extend(['mIoU', 'OA'])
-                writer.writerow(header)
-            self.logger.info(f"已创建验证指标CSV文件，路径：{val_csv_path}")
-        else:
-            self.logger.info(f"验证指标CSV文件已存在，路径：{val_csv_path}")
-
-    def _compute_metrics(self, predictions, targets, num_classes):
-        """优化：向量化计算混淆矩阵，解决验证速度慢问题"""
-        # 展平预测和目标为一维张量
-        predictions = predictions.view(-1).long()
-        targets = targets.view(-1).long()
-
-        # 过滤无效标签
-        valid_mask = (targets != self.cfg.data.ignore_index) & (predictions < num_classes)
-        predictions = predictions[valid_mask]
-        targets = targets[valid_mask]
-
-        if len(predictions) == 0:
-            return {
-                'iou': np.zeros(num_classes),
-                'acc': np.zeros(num_classes),
-                'miou': 0.0,
-                'oa': 0.0
-            }
-
-        # 向量化计算混淆矩阵（核心优化）
-        idx = targets * num_classes + predictions
-        confusion_matrix = torch.bincount(idx, minlength=num_classes ** 2).view(num_classes, num_classes)
-
-        # 分布式聚合
-        confusion_matrix = comm.all_reduce(confusion_matrix, op="sum")
-
-        # 计算指标
-        iou = torch.diag(confusion_matrix) / (
-                confusion_matrix.sum(dim=1) + confusion_matrix.sum(dim=0) - torch.diag(confusion_matrix) + 1e-10
-        )
-        acc = torch.diag(confusion_matrix) / (confusion_matrix.sum(dim=1) + 1e-10)
-        miou = iou.mean().item()
-        oa = torch.diag(confusion_matrix).sum().item() / (confusion_matrix.sum().item() + 1e-10)
-
-        return {
-            'iou': iou.cpu().numpy(),
-            'acc': acc.cpu().numpy(),
-            'miou': miou,
-            'oa': oa
-        }
-
-    def _save_metrics_to_csv(self, epoch, metrics, is_train=True):
-        """将指标保存到CSV文件"""
-        if not comm.is_main_process():
-            self.logger.debug(f"非主进程（rank={comm.get_rank()}），跳过CSV写入")
-            return
-
-        csv_path = os.path.join(self.metrics_dir, "train_metrics.csv" if is_train else "val_metrics.csv")
-        self.logger.info(f"主进程：开始写入{'训练' if is_train else '验证'}指标到CSV，路径：{csv_path}")
-
-        with open(csv_path, 'a', newline='') as f:
-            writer = csv.writer(f)
-            row = [epoch]
-            for i in range(self.num_classes):
-                row.append(metrics['iou'][i])
-            for i in range(self.num_classes):
-                row.append(metrics['acc'][i])
-            row.append(metrics['miou'])
-            row.append(metrics['oa'])
-            writer.writerow(row)
-
-        self.logger.info(f"主进程：{'训练' if is_train else '验证'}指标已写入CSV，epoch={epoch}，mIoU={metrics['miou']:.4f}")
-
     def train(self):
         with EventStorage() as self.storage, ExceptionWriter():
+            # => before train
             self.before_train()
             self.logger.info(">>>>>>>>>>>>>>>> Start Training >>>>>>>>>>>>>>>>")
-
-            # 用于收集训练集指标的变量
-            self.train_predictions = []
-            self.train_targets = []
-
             for self.epoch in range(self.start_epoch, self.max_epoch):
-                # 分布式训练时，设置采样器epoch
+                # => before epoch
+                # TODO: optimize to iteration based
                 if comm.get_world_size() > 1:
                     self.train_loader.sampler.set_epoch(self.epoch)
                 self.model.train()
                 self.data_iterator = enumerate(self.train_loader)
-
-                # 重置训练指标收集
-                self.train_predictions = []
-                self.train_targets = []
-
                 self.before_epoch()
+                # => run_epoch
                 for (
                     self.comm_info["iter"],
                     self.comm_info["input_dict"],
                 ) in self.data_iterator:
+                    # => before_step
                     self.before_step()
+                    # => run_step
                     self.run_step()
+                    # => after_step
                     self.after_step()
-
-                    # 收集训练预测和目标（修复：使用seg_logits作为预测键）
-                    output_dict = self.comm_info.get("model_output_dict", {})
-                    input_dict = self.comm_info.get("input_dict", {})
-
-                    if 'seg_logits' in output_dict and 'segment' in input_dict:
-                        self.logger.debug(f"Epoch {self.epoch}, Iter {self.comm_info['iter']}: 找到'seg_logits'和'segment'键，开始收集数据")
-                        # 从logits计算预测类别（argmax）
-                        pred = output_dict['seg_logits'].argmax(dim=1).detach()
-                        self.train_predictions.append(pred)
-                        self.train_targets.append(input_dict['segment'])
-                    else:
-                        # 未找到键时提示（仅在首轮epoch打印）
-                        if self.epoch == 0 and self.comm_info["iter"] == 0:
-                            if 'seg_logits' not in output_dict:
-                                self.logger.warning(f"模型输出中未找到'seg_logits'键，当前输出键：{list(output_dict.keys())}")
-                            if 'segment' not in input_dict:
-                                self.logger.warning(f"输入数据中未找到'segment'键，当前输入键：{list(input_dict.keys())}")
-
-                # 计算并保存训练集指标
-                if self.train_predictions and self.train_targets:
-                    self.logger.info(f"Epoch {self.epoch}：共收集到{len(self.train_predictions)}个批次的训练预测数据")
-                    all_preds = torch.cat(self.train_predictions, dim=0)
-                    all_targets = torch.cat(self.train_targets, dim=0)
-                    self.logger.debug(f"Epoch {self.epoch}：拼接后预测数据形状：{all_preds.shape}，标签数据形状：{all_targets.shape}")
-
-                    # 忽略无效标签
-                    valid_mask = all_targets != self.cfg.data.ignore_index
-                    all_preds = all_preds[valid_mask]
-                    all_targets = all_targets[valid_mask]
-                    self.logger.info(f"Epoch {self.epoch}：过滤无效标签后，有效样本数：{all_preds.numel()}")
-
-                    if all_preds.numel() > 0:  # 确保有有效数据
-                        train_metrics = self._compute_metrics(all_preds, all_targets, self.num_classes)
-                        self._save_metrics_to_csv(self.epoch, train_metrics, is_train=True)
-                    else:
-                        self.logger.warning(f"Epoch {self.epoch}：训练集有效样本数为0，跳过指标计算")
-                else:
-                    self.logger.warning(f"Epoch {self.epoch}：未收集到任何训练预测/标签数据")
-
-                # 验证并计算验证集指标
-                if self.val_loader is not None:
-                    self.model.eval()
-                    val_predictions = []
-                    val_targets = []
-                    self.logger.info(f"Epoch {self.epoch}：开始验证，验证集批次总数：{len(self.val_loader)}")
-
-                    with torch.no_grad():
-                        for val_idx, val_input in enumerate(self.val_loader):
-                            # 将数据移至GPU
-                            for key in val_input.keys():
-                                if isinstance(val_input[key], torch.Tensor):
-                                    val_input[key] = val_input[key].cuda(non_blocking=True)
-
-                            # 模型推理
-                            val_output = self.model(val_input)
-
-                            # 收集验证数据（修复：使用seg_logits作为预测键）
-                            if 'seg_logits' not in val_output:
-                                self.logger.warning(f"验证集批次 {val_idx}：模型输出中未找到'seg_logits'键，当前输出键：{list(val_output.keys())}")
-                            if 'segment' not in val_input:
-                                self.logger.warning(f"验证集批次 {val_idx}：输入数据中未找到'segment'键，当前输入键：{list(val_input.keys())}")
-
-                            if 'seg_logits' in val_output and 'segment' in val_input:
-                                # 从logits计算预测类别（argmax）
-                                val_pred = val_output['seg_logits'].argmax(dim=1)
-                                val_predictions.append(val_pred)
-                                val_targets.append(val_input['segment'])
-
-                    # 计算并保存验证集指标
-                    if val_predictions and val_targets:
-                        self.logger.info(f"Epoch {self.epoch}：共收集到{len(val_predictions)}个批次的验证预测数据")
-                        all_val_preds = torch.cat(val_predictions, dim=0)
-                        all_val_targets = torch.cat(val_targets, dim=0)
-                        self.logger.debug(f"Epoch {self.epoch}：验证集拼接后预测形状：{all_val_preds.shape}，标签形状：{all_val_targets.shape}")
-
-                        val_valid_mask = all_val_targets != self.cfg.data.ignore_index
-                        all_val_preds = all_val_preds[val_valid_mask]
-                        all_val_targets = all_val_targets[val_valid_mask]
-                        self.logger.info(f"Epoch {self.epoch}：验证集有效样本数：{all_val_preds.numel()}")
-
-                        if all_val_preds.numel() > 0:  # 确保有有效数据
-                            val_metrics = self._compute_metrics(all_val_preds, all_val_targets, self.num_classes)
-                            self._save_metrics_to_csv(self.epoch, val_metrics, is_train=False)
-                        else:
-                            self.logger.warning(f"Epoch {self.epoch}：验证集有效样本数为0，跳过指标计算")
-                    else:
-                        self.logger.warning(f"Epoch {self.epoch}：未收集到任何验证预测/标签数据")
-                else:
-                    self.logger.info(f"Epoch {self.epoch}：未初始化验证集（self.val_loader为None）")
-
+                # => after epoch
                 self.after_epoch()
-
+            # => after train
             self.after_train()
 
     def run_step(self):
         input_dict = self.comm_info["input_dict"]
+        # import ipdb; ipdb.set_trace()
         for key in input_dict.keys():
             if isinstance(input_dict[key], torch.Tensor):
                 input_dict[key] = input_dict[key].cuda(non_blocking=True)
-
-        # 关键修复：训练模式下额外执行一次前向传播获取seg_logits
         with torch.cuda.amp.autocast(enabled=self.cfg.enable_amp):
-            # 第一次前向传播：获取损失（原逻辑）
             output_dict = self.model(input_dict)
             loss = output_dict["loss"]
-
-            # 第二次前向传播（仅训练模式）：获取seg_logits
-            if self.model.training:
-                # 禁用梯度计算以节省内存
-                with torch.no_grad():
-                    # 切换为评估模式执行一次前向传播，获取seg_logits
-                    self.model.eval()
-                    val_output = self.model(input_dict)
-                    # 将seg_logits添加到训练输出中
-                    if 'seg_logits' in val_output:
-                        output_dict['seg_logits'] = val_output['seg_logits']
-                    else:
-                        self.logger.warning("训练模式下，评估模式的输出也没有'seg_logits'键")
-                    # 切回训练模式
-                    self.model.train()
-
         self.optimizer.zero_grad()
         if self.cfg.enable_amp:
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
+
+            # When enable amp, optimizer.step call are skipped if the loss scaling factor is too large.
+            # Fix torch warning scheduler step before optimizer step.
             scaler = self.scaler.get_scale()
             self.scaler.update()
             if scaler <= self.scaler.get_scale():
@@ -520,12 +199,13 @@ class Trainer(TrainerBase):
             self.scheduler.step()
         if self.cfg.empty_cache:
             torch.cuda.empty_cache()
-        self.comm_info["model_output_dict"] = output_dict  # 确保包含'seg_logits'
+        self.comm_info["model_output_dict"] = output_dict
 
     def after_epoch(self):
         for h in self.hooks:
             h.after_epoch()
         self.storage.reset_histories()
+        # if self.cfg.empty_cache_per_epoch:
         torch.cuda.empty_cache()
 
     def build_model(self):
@@ -533,6 +213,7 @@ class Trainer(TrainerBase):
         if self.cfg.sync_bn:
             model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
         n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        # logger.info(f"Model: \n{self.model}")
         self.logger.info(f"Num params: {n_parameters}")
         model = create_ddp_model(
             model.cuda(),
@@ -620,8 +301,8 @@ class MultiDatasetTrainer(Trainer):
         train_data = build_dataset(self.cfg.data.train)
         train_loader = MultiDatasetDataloader(
             train_data,
-            self.cfg.batch_size,
-            self.cfg.num_worker,
+            self.cfg.batch_size_per_gpu,
+            self.cfg.num_worker_per_gpu,
             self.cfg.mix_prob,
             self.cfg.seed,
         )
