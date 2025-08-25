@@ -54,6 +54,8 @@ class ScanNetDataset(DefaultDataset):
         print(f"[get_data_list] 重写逻辑：直接扫描场景文件夹")
 
         # 1. 拼接完整的 train 目录路径（data_root + split）
+        # 此时 self.data_root 是配置中的 /root/autodl-tmp/data/data_scannet_tower
+        # self.split 是配置中的 "train"
         train_dir = os.path.join(self.data_root, self.split)
         print(f"  扫描的 train 目录路径: {train_dir}")
 
@@ -65,6 +67,7 @@ class ScanNetDataset(DefaultDataset):
             )
 
         # 3. 扫描 train 目录下的所有子文件夹（每个文件夹就是一个场景）
+        # 只保留文件夹，过滤文件（如 .txt）
         scene_folders = []
         for fname in os.listdir(train_dir):
             scene_path = os.path.join(train_dir, fname)
@@ -86,7 +89,12 @@ class ScanNetDataset(DefaultDataset):
         return scene_folders  # 返回场景路径列表
 
     def get_data(self, idx):
+        # 新增调试日志：验证数据加载
+        # print(f"\n[get_data] 加载第 {idx} 个样本")
         data_path = self.data_list[idx % len(self.data_list)]
+        # print(f"  数据路径: {data_path}")
+        # print(f"  路径是否存在: {os.path.exists(data_path)}")
+
         name = self.get_data_name(idx)
         if self.cache:
             cache_name = f"pointcept-{name}"
@@ -95,11 +103,11 @@ class ScanNetDataset(DefaultDataset):
         data_dict = {}
         try:
             assets = os.listdir(data_path)
+            # print(f"  场景文件夹下的文件: {assets}")  # 打印文件夹内的文件
         except Exception as e:
             print(f"  读取文件夹失败: {str(e)}")
             return data_dict
 
-        # 加载各类资产（coord/color/normal等）
         for asset in assets:
             if not asset.endswith(".npy"):
                 continue
@@ -107,42 +115,11 @@ class ScanNetDataset(DefaultDataset):
                 continue
             try:
                 data_dict[asset[:-4]] = np.load(os.path.join(data_path, asset))
+                # print(f"  成功加载: {asset}，shape: {data_dict[asset[:-4]].shape}")
             except Exception as e:
                 print(f"  加载 {asset} 失败: {str(e)}")
 
-        # --------------------------
-        # 新增：坐标归一化（复用 NormalizeCoord 逻辑）
-        # 步骤：1. 中心化（减均值） 2. 标准化（除以最大距离）
-        # --------------------------
-        if "coord" in data_dict:
-            # 1. 坐标中心化（消除绝对位置偏差）
-            centroid = np.mean(data_dict["coord"], axis=0)
-            data_dict["coord"] -= centroid
-            # 2. 坐标标准化（统一尺度，最大距离为1）
-            max_dist = np.max(np.sqrt(np.sum(data_dict["coord"] ** 2, axis=1)))
-            # 避免除以0（若所有点重合，max_dist为0，不执行标准化）
-            if max_dist > 1e-6:
-                data_dict["coord"] = data_dict["coord"] / max_dist
-            # print(f"  [坐标归一化] 完成，处理后坐标范围：{data_dict['coord'].min(axis=0)} ~ {data_dict['coord'].max(axis=0)}")
-
-        # --------------------------
-        # 新增：法向量归一化（转为单位向量）
-        # 确保法向量模长为1，统一方向特征尺度
-        # --------------------------
-        if "normal" in data_dict:
-            # 计算每个法向量的模长
-            norm = np.linalg.norm(data_dict["normal"], axis=1, keepdims=True)
-            # 避免除以0（模长接近0时，保留原始值）
-            norm = np.where(norm < 1e-6, 1e-6, norm)
-            # 归一化为单位向量
-            data_dict["normal"] = data_dict["normal"] / norm
-            # 验证：打印部分法向量的模长（应接近1）
-            sample_norm = np.mean(np.linalg.norm(data_dict["normal"][:100], axis=1))  # 采样前100个验证
-            # print(f"  [法向量归一化] 完成，采样法向量平均模长：{sample_norm:.4f}（目标：1.0）")
-
-        # --------------------------
-        # 原有逻辑：数据类型转换 + 标签处理
-        # --------------------------
+        # 后续处理逻辑不变...
         data_dict["name"] = name
         if "coord" in data_dict:
             data_dict["coord"] = data_dict["coord"].astype(np.float32)
