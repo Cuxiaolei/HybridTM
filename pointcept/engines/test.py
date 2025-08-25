@@ -112,8 +112,7 @@ class TesterBase:
 
     @staticmethod
     def collate_fn(batch):
-        # 修复原代码中的语法错误
-        return batch
+        raise collate_fn(batch)
 
 
 @TESTERS.register_module()
@@ -162,11 +161,15 @@ class SemSegTester(TesterBase):
         # 碎片推理
         for idx, data_dict in enumerate(self.test_loader):
             end = time.time()
-            data_dict = data_dict[0]  # 假设批次大小为1
+            # 处理批次数据（关键修改）
+            if isinstance(data_dict, list):
+                # 如果是列表，取第一个元素（假设batch_size=1）
+                data_dict = data_dict[0]
+
             fragment_list = data_dict.pop("fragment_list")
             segment = data_dict.pop("segment")
             data_name = data_dict.pop("name")
-            pred_save_path = os.path.join(save_path, f"{data_name}_pred.npy")
+            pred_save_path = os.path.join(save_path, "{}_pred.npy".format(data_name))
 
             if os.path.isfile(pred_save_path):
                 logger.info(
