@@ -232,10 +232,8 @@ class Trainer(TrainerBase):
 
         if comm.get_world_size() > 1:
             train_sampler = torch.utils.data.distributed.DistributedSampler(train_data)
-            print("------------------------------------------------------shuffle = False")
         else:
             train_sampler = None
-            print("------------------------------------------------------shuffle = True")
 
         init_fn = (
             partial(
@@ -250,15 +248,15 @@ class Trainer(TrainerBase):
 
         train_loader = torch.utils.data.DataLoader(
             train_data,
-            batch_size=self.cfg.batch_size,
+            batch_size=self.cfg.batch_size_per_gpu,
             shuffle=(train_sampler is None),
-            num_workers=self.cfg.num_worker,
+            num_workers=self.cfg.num_worker_per_gpu,
             sampler=train_sampler,
             collate_fn=partial(point_collate_fn, mix_prob=self.cfg.mix_prob),
             pin_memory=True,
             worker_init_fn=init_fn,
             drop_last=True,
-            persistent_workers=False,
+            persistent_workers=True,
         )
         return train_loader
 
@@ -272,9 +270,9 @@ class Trainer(TrainerBase):
                 val_sampler = None
             val_loader = torch.utils.data.DataLoader(
                 val_data,
-                batch_size=self.cfg.batch_size,
-                shuffle=True,
-                num_workers=self.cfg.num_worker,
+                batch_size=self.cfg.batch_size_val_per_gpu,
+                shuffle=False,
+                num_workers=self.cfg.num_worker_per_gpu,
                 pin_memory=True,
                 sampler=val_sampler,
                 collate_fn=collate_fn,
