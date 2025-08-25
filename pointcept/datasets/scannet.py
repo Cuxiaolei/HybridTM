@@ -45,35 +45,48 @@ class ScanNetDataset(DefaultDataset):
         print("=" * 50 + "\n")
         super().__init__(**kwargs)
 
+    # --------------------------
+    # 关键修改：完全重写 get_data_list()
+    # 不依赖 DefaultDataset，直接扫描 train 目录下的场景文件夹
+    # --------------------------
     def get_data_list(self):
-        # 新增调试日志：进入数据列表生成逻辑
         print("\n" + "-" * 50)
-        print(f"[get_data_list] 开始生成数据列表")
+        print(f"[get_data_list] 重写逻辑：直接扫描场景文件夹")
 
-        if self.lr is None:
-            print(f"  未使用 lr_file，调用父类 DefaultDataset.get_data_list()")
-            data_list = super().get_data_list()
-            # 新增调试日志：打印父类返回的结果
-            print(f"  父类返回的 data_list 长度: {len(data_list)}")
-            if len(data_list) > 0:
-                print(f"  父类返回的第一个场景路径: {data_list[0]}")
-                # 验证路径是否存在
-                print(f"  该路径是否存在: {os.path.exists(data_list[0])}")
-            else:
-                print(f"  父类返回空 data_list！")
-        else:
-            print(f"  使用 lr_file，场景名列表: {self.lr}")
-            data_list = [os.path.join(self.data_root, "train", name) for name in self.lr]
-            # 新增调试日志：打印生成的路径
-            print(f"  生成的 data_list 长度: {len(data_list)}")
-            if len(data_list) > 0:
-                print(f"  生成的第一个场景路径: {data_list[0]}")
-                print(f"  该路径是否存在: {os.path.exists(data_list[0])}")
+        # 1. 拼接完整的 train 目录路径（data_root + split）
+        # 此时 self.data_root 是配置中的 /root/autodl-tmp/data/data_scannet_tower
+        # self.split 是配置中的 "train"
+        train_dir = os.path.join(self.data_root, self.split)
+        print(f"  扫描的 train 目录路径: {train_dir}")
 
-        # 新增调试日志：最终数据列表信息
-        print(f"[get_data_list] 最终 data_list 长度: {len(data_list)}")
+        # 2. 检查 train 目录是否存在
+        if not os.path.exists(train_dir):
+            raise FileNotFoundError(
+                f"train 目录不存在：{train_dir}\n"
+                f"请确认路径是否正确，或场景文件夹是否已放入该目录"
+            )
+
+        # 3. 扫描 train 目录下的所有子文件夹（每个文件夹就是一个场景）
+        # 只保留文件夹，过滤文件（如 .txt）
+        scene_folders = []
+        for fname in os.listdir(train_dir):
+            scene_path = os.path.join(train_dir, fname)
+            if os.path.isdir(scene_path):  # 核心判断：是否为文件夹
+                scene_folders.append(scene_path)
+                print(f"  找到场景文件夹: {fname}")  # 打印找到的场景名
+
+        # 4. 检查是否找到场景
+        if len(scene_folders) == 0:
+            raise ValueError(
+                f"在 {train_dir} 中未找到任何场景文件夹！\n"
+                f"当前目录下的内容：{os.listdir(train_dir)}\n"
+                f"请确认场景文件夹（如 scene0001_00）已放入该目录"
+            )
+
+        # 5. 输出最终结果
+        print(f"  共找到 {len(scene_folders)} 个场景文件夹")
         print("-" * 50 + "\n")
-        return data_list
+        return scene_folders  # 返回场景路径列表
 
     def get_data(self, idx):
         # 新增调试日志：验证数据加载
