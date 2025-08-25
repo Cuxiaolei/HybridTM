@@ -235,6 +235,7 @@ class Trainer(TrainerBase):
             print("------------------------------------------------------shuffle = False")
         else:
             train_sampler = None
+            print("------------------------------------------------------shuffle = True")
 
         init_fn = (
             partial(
