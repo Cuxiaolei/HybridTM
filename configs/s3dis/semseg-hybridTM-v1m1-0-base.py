@@ -1,7 +1,7 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 2  # 根据您的GPU内存调整
+batch_size = 1  # 根据您的GPU内存调整
 num_worker = 0
 mix_prob = 0.8
 empty_cache = True
@@ -95,9 +95,9 @@ data = dict(
             # # dict(type="ElasticDistortion", distortion_params=[[0.2, 0.4], [0.8, 1.6]]),
             # dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
             # dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
-            # dict(type="ChromaticJitter", p=0.95, std=0.05),
-            # # dict(type="HueSaturationTranslation", hue_max=0.2, saturation_max=0.2),
-            # # dict(type="RandomColorDrop", p=0.2, color_augment=0.0),
+            dict(type="ChromaticJitter", p=0.95, std=0.05),
+            dict(type="HueSaturationTranslation", hue_max=0.2, saturation_max=0.2),
+            dict(type="RandomColorDrop", p=0.2, color_augment=0.0),
             # dict(
             #     type="GridSample",
             #     grid_size=0.02,
@@ -106,10 +106,10 @@ data = dict(
             #     return_grid_coord=True,
             # ),
             # dict(type="SphereCrop", sample_rate=0.6, mode="random"),
-            # dict(type="SphereCrop", point_max=10000, mode="random"),
+            dict(type="SphereCrop", point_max=10000, mode="random"),
             # dict(type="CenterShift", apply_z=False),
             # dict(type="NormalizeColor"),
-            # # dict(type="ShufflePoint"),
+            dict(type="ShufflePoint"),
             # dict(type="ToTensor"),
             # dict(
             #     type="Collect",
