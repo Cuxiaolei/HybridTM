@@ -612,7 +612,7 @@ class HybridTM(PointModule):
                         stride=stride[s - 1],
                         norm_layer=bn_layer,
                         act_layer=act_layer,
-                        indice_key=f"enc_stage{s}",
+                        # indice_key=f"enc_stage{s}",
                     ),
                     name="down",
                 )
