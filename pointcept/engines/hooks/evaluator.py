@@ -4,7 +4,8 @@ Evaluate Hook
 Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
 """
-
+import csv
+import os
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -104,23 +105,67 @@ class ClsEvaluator(HookBase):
 
 @HOOKS.register_module()
 class SemSegEvaluator(HookBase):
+    def __init__(self):
+        super().__init__()
+        # 初始化CSV文件路径
+        self.csv_path = os.path.join("exp", "semantic_segmentation_metrics.csv")
+        self._init_csv()
+
+    def _init_csv(self):
+        """初始化CSV文件并写入表头"""
+        # 创建存储目录（如果不存在）
+        os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
+
+        # 只有在文件不存在时才写入表头
+        if not os.path.exists(self.csv_path):
+            with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                # 表头格式：轮次 + 每类IoU + 每类Acc + mIoU + OA
+                header = ['epoch']
+                # 动态获取类别数量（初始化时可能还没有trainer，先用默认3类）
+                num_classes = 3  # 会在第一次评估时更新
+                if hasattr(self, 'trainer') and hasattr(self.trainer.cfg.data, 'num_classes'):
+                    num_classes = self.trainer.cfg.data.num_classes
+                for i in range(num_classes):
+                    header.append(f'class_{i}_IoU')
+                    header.append(f'class_{i}_Acc')
+                header.extend(['mIoU', 'OA'])
+                writer.writerow(header)
+
     def after_epoch(self):
-        if self.trainer.cfg.evaluate:
+        """在每个epoch结束后执行评估"""
+        if hasattr(self.trainer.cfg, 'evaluate') and self.trainer.cfg.evaluate:
             self.eval()
 
     def eval(self):
-        self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        """执行评估并计算指标"""
+        self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Segmentation Evaluation >>>>>>>>>>>>>>>>")
         self.trainer.model.eval()
+
+        # 初始化累计变量
+        total_intersection = None
+        total_union = None
+        total_target = None
+        total_loss = 0.0
+        num_classes = self.trainer.cfg.data.num_classes
+
         for i, input_dict in enumerate(self.trainer.val_loader):
+            # 数据移至GPU
             for key in input_dict.keys():
                 if isinstance(input_dict[key], torch.Tensor):
                     input_dict[key] = input_dict[key].cuda(non_blocking=True)
+
+            # 模型推理（无梯度）
             with torch.no_grad():
                 output_dict = self.trainer.model(input_dict)
-            output = output_dict["seg_logits"]
+
+            # 获取预测和标签
+            output = output_dict["seg_logits"]  # 分割模型输出
             loss = output_dict["loss"]
-            pred = output.max(1)[1]
-            segment = input_dict["segment"]
+            pred = output.max(1)[1]  # 取概率最大的类别作为预测
+            label = input_dict["segment"]  # 真实标签
+
+            # 处理坐标映射（如果需要）
             if "origin_coord" in input_dict.keys():
                 idx, _ = pointops.knn_query(
                     1,
@@ -130,76 +175,102 @@ class SemSegEvaluator(HookBase):
                     input_dict["origin_offset"].int(),
                 )
                 pred = pred[idx.flatten().long()]
-                segment = input_dict["origin_segment"]
+                label = input_dict["origin_segment"]
+
+            # 计算当前batch的交并集
             intersection, union, target = intersection_and_union_gpu(
                 pred,
-                segment,
-                self.trainer.cfg.data.num_classes,
+                label,
+                num_classes,
                 self.trainer.cfg.data.ignore_index,
             )
+
+            # 多卡训练时汇总结果
             if comm.get_world_size() > 1:
-                dist.all_reduce(intersection), dist.all_reduce(union), dist.all_reduce(
-                    target
-                )
-            intersection, union, target = (
-                intersection.cpu().numpy(),
-                union.cpu().numpy(),
-                target.cpu().numpy(),
-            )
-            # Here there is no need to sync since sync happened in dist.all_reduce
-            self.trainer.storage.put_scalar("val_intersection", intersection)
-            self.trainer.storage.put_scalar("val_union", union)
-            self.trainer.storage.put_scalar("val_target", target)
-            self.trainer.storage.put_scalar("val_loss", loss.item())
-            info = "Test: [{iter}/{max_iter}] ".format(
-                iter=i + 1, max_iter=len(self.trainer.val_loader)
-            )
+                comm.all_reduce(intersection), comm.all_reduce(union), comm.all_reduce(target)
+
+            # 转为numpy并累计
+            intersection = intersection.cpu().numpy()
+            union = union.cpu().numpy()
+            target = target.cpu().numpy()
+
+            # 初始化累计变量（第一次迭代）
+            if total_intersection is None:
+                total_intersection = np.zeros_like(intersection)
+                total_union = np.zeros_like(union)
+                total_target = np.zeros_like(target)
+
+            total_intersection += intersection
+            total_union += union
+            total_target += target
+            total_loss += loss.item()
+
+            # 打印当前batch信息
+            info = f"Test: [{i + 1}/{len(self.trainer.val_loader)}] Loss {loss.item():.4f}"
             if "origin_coord" in input_dict.keys():
                 info = "Interp. " + info
+            self.trainer.logger.info(info)
+
+        # 计算所有指标
+        loss_avg = total_loss / len(self.trainer.val_loader)
+        iou_class = total_intersection / (total_union + 1e-10)  # 每类IoU
+        acc_class = total_intersection / (total_target + 1e-10)  # 每类Accuracy
+        m_iou = np.mean(iou_class)  # 平均IoU
+        oa = sum(total_intersection) / (sum(total_target) + 1e-10)  # 总体准确率
+
+        # 1. 打印整体指标
+        self.trainer.logger.info("=" * 70)
+        self.trainer.logger.info(f"Validation Results - Epoch: {self.trainer.epoch + 1}")
+        self.trainer.logger.info(f"mIoU: {m_iou:.4f} | OA: {oa:.4f} | Avg Loss: {loss_avg:.4f}")
+        self.trainer.logger.info("=" * 70)
+
+        # 2. 打印每个类别的详细指标
+        self.trainer.logger.info("Per-class Metrics:")
+        for i in range(num_classes):
+            class_name = self.trainer.cfg.data.names[i] if hasattr(self.trainer.cfg.data, 'names') else f"Class {i}"
             self.trainer.logger.info(
-                info
-                + "Loss {loss:.4f} ".format(
-                    iter=i + 1, max_iter=len(self.trainer.val_loader), loss=loss.item()
-                )
+                f"{class_name} - IoU: {iou_class[i]:.4f} | Acc: {acc_class[i]:.4f}"
             )
-        loss_avg = self.trainer.storage.history("val_loss").avg
-        intersection = self.trainer.storage.history("val_intersection").total
-        union = self.trainer.storage.history("val_union").total
-        target = self.trainer.storage.history("val_target").total
-        iou_class = intersection / (union + 1e-10)
-        acc_class = intersection / (target + 1e-10)
-        m_iou = np.mean(iou_class)
-        m_acc = np.mean(acc_class)
-        all_acc = sum(intersection) / (sum(target) + 1e-10)
-        self.trainer.logger.info(
-            "Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}.".format(
-                m_iou, m_acc, all_acc
-            )
-        )
-        for i in range(self.trainer.cfg.data.num_classes):
-            self.trainer.logger.info(
-                "Class_{idx}-{name} Result: iou/accuracy {iou:.4f}/{accuracy:.4f}".format(
-                    idx=i,
-                    name=self.trainer.cfg.data.names[i],
-                    iou=iou_class[i],
-                    accuracy=acc_class[i],
-                )
-            )
+        self.trainer.logger.info("=" * 70)
+
+        # 3. 记录到TensorBoard
         current_epoch = self.trainer.epoch + 1
-        if self.trainer.writer is not None:
+        if hasattr(self.trainer, 'writer') and self.trainer.writer is not None:
             self.trainer.writer.add_scalar("val/loss", loss_avg, current_epoch)
             self.trainer.writer.add_scalar("val/mIoU", m_iou, current_epoch)
-            self.trainer.writer.add_scalar("val/mAcc", m_acc, current_epoch)
-            self.trainer.writer.add_scalar("val/allAcc", all_acc, current_epoch)
-        self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
-        self.trainer.comm_info["current_metric_value"] = m_iou  # save for saver
-        self.trainer.comm_info["current_metric_name"] = "mIoU"  # save for saver
+            self.trainer.writer.add_scalar("val/OA", oa, current_epoch)
 
-    def after_train(self):
-        self.trainer.logger.info(
-            "Best {}: {:.4f}".format("mIoU", self.trainer.best_metric_value)
-        )
+            # 记录每个类的指标
+            for i in range(num_classes):
+                self.trainer.writer.add_scalar(f"val/class_{i}_IoU", iou_class[i], current_epoch)
+                self.trainer.writer.add_scalar(f"val/class_{i}_Acc", acc_class[i], current_epoch)
 
+        # 4. 保存到CSV文件
+        self._save_to_csv(current_epoch, iou_class, acc_class, m_iou, oa)
+
+        self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Segmentation Evaluation <<<<<<<<<<<<<<<<<")
+        # 更新最佳模型判断指标
+        self.trainer.comm_info["current_metric_value"] = m_iou
+        self.trainer.comm_info["current_metric_name"] = "mIoU"
+
+    def _save_to_csv(self, epoch, iou_class, acc_class, m_iou, oa):
+        """将当前轮次的指标保存到CSV"""
+        # 确保表头正确（如果类别数量与初始不同）
+        if not os.path.exists(self.csv_path):
+            self._init_csv()
+
+        with open(self.csv_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            # 构建数据行：轮次 + 每类IoU + 每类Acc + mIoU + OA
+            row = [epoch]
+            for i in range(len(iou_class)):
+                row.append(round(iou_class[i], 4))  # 保留4位小数
+                row.append(round(acc_class[i], 4))
+            row.append(round(m_iou, 4))
+            row.append(round(oa, 4))
+            writer.writerow(row)
+
+        self.trainer.logger.info(f"Metrics saved to CSV: {self.csv_path}")
 
 @HOOKS.register_module()
 class InsSegEvaluator(HookBase):

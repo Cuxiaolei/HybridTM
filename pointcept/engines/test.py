@@ -13,7 +13,6 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 import torch.utils.data
-import csv
 
 from .defaults import create_ddp_model
 import pointcept.utils.comm as comm
@@ -112,8 +111,7 @@ class TesterBase:
 
     @staticmethod
     def collate_fn(batch):
-        # 修复原代码中的语法错误
-        return batch
+        raise collate_fn(batch)
 
 
 @TESTERS.register_module()
@@ -131,16 +129,20 @@ class SemSegTester(TesterBase):
 
         save_path = os.path.join(self.cfg.save_path, "result")
         make_dirs(save_path)
-        # 创建提交文件夹（仅主进程）
+        # create submit folder only on main process
         if (
-                self.cfg.data.test.type in ["ScanNetDataset", "ScanNet200Dataset", "ScanNetPPDataset"]
-                and comm.is_main_process()
-        ):
+            self.cfg.data.test.type == "ScanNetDataset"
+            or self.cfg.data.test.type == "ScanNet200Dataset"
+            or self.cfg.data.test.type == "ScanNetPPDataset"
+        ) and comm.is_main_process():
             make_dirs(os.path.join(save_path, "submit"))
-        elif self.cfg.data.test.type == "SemanticKITTIDataset" and comm.is_main_process():
+        elif (
+            self.cfg.data.test.type == "SemanticKITTIDataset" and comm.is_main_process()
+        ):
             make_dirs(os.path.join(save_path, "submit"))
         elif self.cfg.data.test.type == "NuScenesDataset" and comm.is_main_process():
             import json
+
             make_dirs(os.path.join(save_path, "submit", "lidarseg", "test"))
             make_dirs(os.path.join(save_path, "submit", "test"))
             submission = dict(
@@ -153,24 +155,24 @@ class SemSegTester(TesterBase):
                 )
             )
             with open(
-                    os.path.join(save_path, "submit", "test", "submission.json"), "w"
+                os.path.join(save_path, "submit", "test", "submission.json"), "w"
             ) as f:
                 json.dump(submission, f, indent=4)
         comm.synchronize()
-
         record = {}
-        # 碎片推理
+        # fragment inference
         for idx, data_dict in enumerate(self.test_loader):
             end = time.time()
-            data_dict = data_dict[0]  # 假设批次大小为1
+            data_dict = data_dict[0]  # current assume batch size is 1
             fragment_list = data_dict.pop("fragment_list")
             segment = data_dict.pop("segment")
             data_name = data_dict.pop("name")
-            pred_save_path = os.path.join(save_path, f"{data_name}_pred.npy")
-
+            pred_save_path = os.path.join(save_path, "{}_pred.npy".format(data_name))
             if os.path.isfile(pred_save_path):
                 logger.info(
-                    f"{idx + 1}/{len(self.test_loader)}: {data_name}, loaded pred and label."
+                    "{}/{}: {}, loaded pred and label.".format(
+                        idx + 1, len(self.test_loader), data_name
+                    )
                 )
                 pred = np.load(pred_save_path)
                 if "origin_segment" in data_dict.keys():
@@ -182,7 +184,7 @@ class SemSegTester(TesterBase):
                     s_i, e_i = i * fragment_batch_size, min(
                         (i + 1) * fragment_batch_size, len(fragment_list)
                     )
-                    input_dict = self.__class__.collate_fn(fragment_list[s_i:e_i])
+                    input_dict = collate_fn(fragment_list[s_i:e_i])
                     for key in input_dict.keys():
                         if isinstance(input_dict[key], torch.Tensor):
                             input_dict[key] = input_dict[key].cuda(non_blocking=True)
@@ -198,7 +200,13 @@ class SemSegTester(TesterBase):
                             bs = be
 
                     logger.info(
-                        f"Test: {idx + 1}/{len(self.test_loader)}-{data_name}, Batch: {i}/{len(fragment_list)}"
+                        "Test: {}/{}-{data_name}, Batch: {batch_idx}/{batch_num}".format(
+                            idx + 1,
+                            len(self.test_loader),
+                            data_name=data_name,
+                            batch_idx=i,
+                            batch_num=len(fragment_list),
+                        )
                     )
                 if self.cfg.data.test.type == "ScanNetPPDataset":
                     pred = pred.topk(3, dim=1)[1].data.cpu().numpy()
@@ -209,22 +217,23 @@ class SemSegTester(TesterBase):
                     pred = pred[data_dict["inverse"]]
                     segment = data_dict["origin_segment"]
                 np.save(pred_save_path, pred)
-
-            # 生成提交文件
-            if self.cfg.data.test.type in ["ScanNetDataset", "ScanNet200Dataset"]:
+            if (
+                self.cfg.data.test.type == "ScanNetDataset"
+                or self.cfg.data.test.type == "ScanNet200Dataset"
+            ):
                 np.savetxt(
-                    os.path.join(save_path, "submit", f"{data_name}.txt"),
+                    os.path.join(save_path, "submit", "{}.txt".format(data_name)),
                     self.test_loader.dataset.class2id[pred].reshape([-1, 1]),
                     fmt="%d",
                 )
             elif self.cfg.data.test.type == "ScanNetPPDataset":
                 np.savetxt(
-                    os.path.join(save_path, "submit", f"{data_name}.txt"),
+                    os.path.join(save_path, "submit", "{}.txt".format(data_name)),
                     pred.astype(np.int32),
                     delimiter=",",
                     fmt="%d",
                 )
-                pred = pred[:, 0]  # 用于mIoU计算，后续可支持top3 mIoU
+                pred = pred[:, 0]  # for mIoU, TODO: support top3 mIoU
             elif self.cfg.data.test.type == "SemanticKITTIDataset":
                 # 00_000000 -> 00, 000000
                 sequence_name, frame_name = data_name.split("_")
@@ -255,11 +264,10 @@ class SemSegTester(TesterBase):
                         "submit",
                         "lidarseg",
                         "test",
-                        f"{data_name}_lidarseg.bin",
+                        "{}_lidarseg.bin".format(data_name),
                     )
                 )
 
-            # 计算评估指标
             intersection, union, target = intersection_and_union(
                 pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
             )
@@ -272,7 +280,7 @@ class SemSegTester(TesterBase):
 
             mask = union != 0
             iou_class = intersection / (union + 1e-10)
-            iou = np.mean(iou_class[mask]) if mask.any() else 0.0
+            iou = np.mean(iou_class[mask])
             acc = sum(intersection) / (sum(target) + 1e-10)
 
             m_iou = np.mean(intersection_meter.sum / (union_meter.sum + 1e-10))
@@ -280,10 +288,20 @@ class SemSegTester(TesterBase):
 
             batch_time.update(time.time() - end)
             logger.info(
-                f"Test: {data_name} [{idx + 1}/{len(self.test_loader)}]-{segment.size} "
-                f"Batch {batch_time.val:.3f} ({batch_time.avg:.3f}) "
-                f"Accuracy {acc:.4f} ({m_acc:.4f}) "
-                f"mIoU {iou:.4f} ({m_iou:.4f})"
+                "Test: {} [{}/{}]-{} "
+                "Batch {batch_time.val:.3f} ({batch_time.avg:.3f}) "
+                "Accuracy {acc:.4f} ({m_acc:.4f}) "
+                "mIoU {iou:.4f} ({m_iou:.4f})".format(
+                    data_name,
+                    idx + 1,
+                    len(self.test_loader),
+                    segment.size,
+                    batch_time=batch_time,
+                    acc=acc,
+                    m_acc=m_acc,
+                    iou=iou,
+                    m_iou=m_iou,
+                )
             )
 
         logger.info("Syncing ...")
@@ -291,14 +309,11 @@ class SemSegTester(TesterBase):
         record_sync = comm.gather(record, dst=0)
 
         if comm.is_main_process():
-            # 合并所有进程的记录
             record = {}
             for _ in range(len(record_sync)):
                 r = record_sync.pop()
                 record.update(r)
                 del r
-
-            # 计算总体指标
             intersection = np.sum(
                 [meters["intersection"] for _, meters in record.items()], axis=0
             )
@@ -311,81 +326,25 @@ class SemSegTester(TesterBase):
                     os.path.join(save_path, f"{self.test_loader.dataset.split}.pth"),
                 )
 
-            # 计算各类指标
             iou_class = intersection / (union + 1e-10)
             accuracy_class = intersection / (target + 1e-10)
             mIoU = np.mean(iou_class)
             mAcc = np.mean(accuracy_class)
             allAcc = sum(intersection) / (sum(target) + 1e-10)
 
-            # 保存结果到CSV
-            csv_path = os.path.join(save_path, "test_results.csv")
-            num_classes = self.cfg.data.num_classes
-            class_names = self.cfg.data.names  # 类别名称列表
-
-            # 确保类别名称存在
-            if not hasattr(self.cfg.data, 'names') or len(class_names) != num_classes:
-                class_names = [f"Class_{i}" for i in range(num_classes)]
-                logger.warning("Class names not properly defined in config, using default names")
-
-            # 写入CSV文件
-            with open(csv_path, mode='w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-
-                # 表头
-                header = ["Scene_Name"]
-                # 每类IOU
-                for i in range(num_classes):
-                    header.append(f"Class_{i}_IOU({class_names[i]})")
-                # 每类Accuracy
-                for i in range(num_classes):
-                    header.append(f"Class_{i}_ACC({class_names[i]})")
-                # 场景级指标
-                header.extend(["Scene_mIoU", "Scene_OA"])
-                writer.writerow(header)
-
-                # 写入每个场景的数据
-                for scene_name, metrics in record.items():
-                    inter = metrics["intersection"]
-                    union = metrics["union"]
-                    target = metrics["target"]
-
-                    # 计算场景级指标
-                    scene_iou = inter / (union + 1e-10)
-                    scene_acc = inter / (target + 1e-10)
-
-                    # 计算场景mIoU（忽略无标注的类别）
-                    valid_mask = union != 0
-                    valid_iou = scene_iou[valid_mask]
-                    scene_miou = np.mean(valid_iou) if valid_iou.size > 0 else 0.0
-
-                    # 计算场景整体准确率
-                    scene_oa = np.sum(inter) / (np.sum(target) + 1e-10)
-
-                    # 构建行数据
-                    row = [scene_name]
-                    row.extend([f"{x:.4f}" for x in scene_iou])
-                    row.extend([f"{x:.4f}" for x in scene_acc])
-                    row.extend([f"{scene_miou:.4f}", f"{scene_oa:.4f}"])
-                    writer.writerow(row)
-
-                # 写入全局平均值
-                avg_row = ["Global_Average"]
-                avg_row.extend([f"{x:.4f}" for x in iou_class])
-                avg_row.extend([f"{x:.4f}" for x in accuracy_class])
-                avg_row.extend([f"{mIoU:.4f}", f"{allAcc:.4f}"])
-                writer.writerow(avg_row)
-
-            # 打印日志
-            logger.info(f"Test results saved to CSV: {csv_path}")
             logger.info(
                 "Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}".format(
                     mIoU, mAcc, allAcc
                 )
             )
-            for i in range(num_classes):
+            for i in range(self.cfg.data.num_classes):
                 logger.info(
-                    f"Class_{i} - {class_names[i]} Result: iou/accuracy {iou_class[i]:.4f}/{accuracy_class[i]:.4f}"
+                    "Class_{idx} - {name} Result: iou/accuracy {iou:.4f}/{accuracy:.4f}".format(
+                        idx=i,
+                        name=self.cfg.data.names[i],
+                        iou=iou_class[i],
+                        accuracy=accuracy_class[i],
+                    )
                 )
             logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
 
