@@ -244,8 +244,14 @@ class MambaBlock(PointModule):
             )
         
         self.norm1 = PointSequential(norm_layer(channels))
-        self.mamba = Mamba(channels, bidirectional=True, d_state=16, d_conv=4, expand=2, use_fast_path=True, causal_conv1d=True, extra_conv=True, concate_output=False)
-
+        self.mamba = Mamba(
+            d_model=channels,  # 核心：输入维度（2.x 版本必须用 d_model）
+            direction='bidirectional',  # 核心：替代 bidirectional=True（2.x 支持双向的正确参数）
+            d_state=16,
+            d_conv=4,
+            expand=2,
+            use_fast_path=True  # 2.x 版本支持该参数，保留
+        )
         self.with_ffn = with_ffn
         if self.with_ffn:
             self.norm2 = PointSequential(norm_layer(channels))
