@@ -69,7 +69,7 @@ dataset_type = "ScanNetDataset"
 data_root = "/root/autodl-tmp/data/data_scannet_tower"
 
 data = dict(
-    num_classes=20,
+    num_classes=3,
     ignore_index=-1,
     names=["class_0", "class_1", "class_2"],
     train=dict(
