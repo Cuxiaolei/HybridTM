@@ -77,30 +77,30 @@ class MyDataset(Dataset):
         # 加载点云数据 (10个通道: 坐标3 + 颜色3 + 法向量3 + 标签1)
         data = np.load(full_path).astype(np.float32)
 
-        # 解析数据
+        # 解析数据（保持原始字段分离）
         coord = data[:, :3]  # 坐标
-        color = data[:, 3:6]  # 颜色
-        norm = data[:, 6:9]  # 法向量（已归一化，保持不变）
+        color = data[:, 3:6]  # 颜色（单独保留）
+        norm = data[:, 6:9]  # 法向量（单独保留）
         segment = data[:, 9].astype(np.int32)  # 标签
 
-        # 对坐标和颜色进行归一化
+        # 对坐标和颜色进行归一化（保持不变）
         coord = self.normalize_coordinates(coord)
         color = self.normalize_colors(color)
 
-        # 合并特征 (坐标+颜色+法向量)
-        strength = np.concatenate([color, norm], axis=1)  # 颜色+法向量作为强度特征
-
+        # 不合并为strength，而是单独存储color和norm
         data_dict = {
             'coord': coord,
-            'strength': strength,
+            'color': color,  # 单独存储颜色
+            'normal': norm,  # 单独存储法向量
             'segment': segment
         }
 
-        # 测试模式下保存原始标签和未归一化的数据
+        # 测试模式下的修改（同步保留原始color和normal）
         if self.test_mode:
             data_dict['origin_segment'] = segment.copy()
-            data_dict['raw_coord'] = data[:, :3].copy()  # 保存原始坐标
-            data_dict['raw_color'] = data[:, 3:6].copy()  # 保存原始颜色
+            data_dict['raw_coord'] = data[:, :3].copy()
+            data_dict['raw_color'] = data[:, 3:6].copy()  # 原始颜色
+            data_dict['raw_normal'] = data[:, 6:9].copy()  # 原始法向量
 
         self.cache[idx] = deepcopy(data_dict)
         return data_dict
