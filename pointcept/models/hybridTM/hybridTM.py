@@ -678,7 +678,7 @@ class HybridTM(PointModule):
                         out_channels=dec_channels[s],
                         norm_layer=bn_layer,
                         act_layer=act_layer,
-                        indice_key=f"dec_stage{s}",
+                        # indice_key=f"dec_stage{s}",
                     ),
                     name="up",
                 )
