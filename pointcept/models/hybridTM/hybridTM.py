@@ -451,7 +451,13 @@ class HybridTMBlock(PointModule):
         self.global_mamba = global_mamba # avoid bugs when the number of points is much less than the patch size
         if self.with_mamba and self.global_mamba:
             mamba_patch_size = patch_size * 4 if mamba_patch_size is None else mamba_patch_size # 4096 as default 
-            self.mamba = Mamba(channels, bidirectional=True, d_state=16, d_conv=4, expand=2, use_fast_path=True, causal_conv1d=True, extra_conv=True, concate_output=False)
+            self.mamba = Mamba(
+                d_model=channels,  # 核心：输入维度（2.2.0 必须用 d_model）
+                d_state=16,  # 支持的参数
+                d_conv=4,  # 支持的参数
+                expand=2,  # 支持的参数
+                use_fast_path=True  # 支持的参数
+            )
             self.norm3 = PointSequential(norm_layer(channels))
         elif self.with_mamba and not self.global_mamba:
             expand = 2
