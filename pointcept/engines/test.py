@@ -171,6 +171,20 @@ class SemSegTester(TesterBase):
             data_name = data_dict.pop("name")
             pred_save_path = os.path.join(save_path, "{}_pred.npy".format(data_name))
 
+            # -------------------------- 1. 添加点数统计（核心新增代码）--------------------------
+            # 获取样本总点数（标签长度 = 点云点数）
+            total_points = len(segment)
+            # 获取有效点数（排除ignore_index对应的无效点）
+            ignore_index = self.cfg.data.ignore_index
+            valid_mask = segment != ignore_index
+            valid_points = valid_mask.sum().item()  # 有效点数（int类型）
+            # 打印调试日志：样本名、总点数、有效点数
+            logger.debug(
+                f"[Sample Debug] {data_name} - Total Points: {total_points}, "
+                f"Valid Points (exclude ignore_index {ignore_index}): {valid_points}"
+            )
+            # -----------------------------------------------------------------------------------
+
             if os.path.isfile(pred_save_path):
                 logger.info(
                     f"{idx + 1}/{len(self.test_loader)}: {data_name}, loaded pred and label."
@@ -178,6 +192,14 @@ class SemSegTester(TesterBase):
                 pred = np.load(pred_save_path)
                 if "origin_segment" in data_dict.keys():
                     segment = data_dict["origin_segment"]
+                    # 若存在原始标签，重新统计点数（原始标签可能对应完整点云）
+                    total_points = len(segment)
+                    valid_mask = segment != ignore_index
+                    valid_points = valid_mask.sum().item()
+                    logger.debug(
+                        f"[Sample Debug] {data_name} (Original Segment) - Total Points: {total_points}, "
+                        f"Valid Points: {valid_points}"
+                    )
             else:
                 pred = torch.zeros((segment.size, self.cfg.data.num_classes)).cuda()
                 for i in range(len(fragment_list)):
@@ -211,9 +233,17 @@ class SemSegTester(TesterBase):
                     assert "inverse" in data_dict.keys()
                     pred = pred[data_dict["inverse"]]
                     segment = data_dict["origin_segment"]
+                    # 若存在原始标签，重新统计点数
+                    total_points = len(segment)
+                    valid_mask = segment != ignore_index
+                    valid_points = valid_mask.sum().item()
+                    logger.debug(
+                        f"[Sample Debug] {data_name} (After Inverse) - Total Points: {total_points}, "
+                        f"Valid Points: {valid_points}"
+                    )
                 np.save(pred_save_path, pred)
 
-            # 生成提交文件
+            # 生成提交文件（原逻辑不变）
             if self.cfg.data.test.type in ["ScanNetDataset", "ScanNet200Dataset"]:
                 np.savetxt(
                     os.path.join(save_path, "submit", f"{data_name}.txt"),
@@ -262,16 +292,22 @@ class SemSegTester(TesterBase):
                     )
                 )
 
-            # 计算评估指标
+            # 计算评估指标（原逻辑不变）
             intersection, union, target = intersection_and_union(
                 pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
             )
             intersection_meter.update(intersection)
             union_meter.update(union)
             target_meter.update(target)
+            # -------------------------- 2. 记录点数到record（供CSV写入）--------------------------
             record[data_name] = dict(
-                intersection=intersection, union=union, target=target
+                intersection=intersection,
+                union=union,
+                target=target,
+                total_points=total_points,  # 新增：总点数
+                valid_points=valid_points   # 新增：有效点数
             )
+            # -----------------------------------------------------------------------------------
 
             mask = union != 0
             iou_class = intersection / (union + 1e-10)
@@ -282,31 +318,43 @@ class SemSegTester(TesterBase):
             m_acc = np.mean(intersection_meter.sum / (target_meter.sum + 1e-10))
 
             batch_time.update(time.time() - end)
+            # -------------------------- 3. 在测试进度日志中添加点数信息 --------------------------
             logger.info(
-                f"Test: {data_name} [{idx + 1}/{len(self.test_loader)}]-{segment.size} "
+                f"Test: {data_name} [{idx + 1}/{len(self.test_loader)}] "
+                f"Points(Total/Valid): {total_points}/{valid_points} "  # 新增点数显示
                 f"Batch {batch_time.val:.3f} ({batch_time.avg:.3f}) "
                 f"Accuracy {acc:.4f} ({m_acc:.4f}) "
                 f"mIoU {iou:.4f} ({m_iou:.4f})"
             )
+            # -----------------------------------------------------------------------------------
 
         logger.info("Syncing ...")
         comm.synchronize()
         record_sync = comm.gather(record, dst=0)
 
         if comm.is_main_process():
-            # 合并所有进程的记录
+            # 合并所有进程的记录（原逻辑不变）
             record = {}
             for _ in range(len(record_sync)):
                 r = record_sync.pop()
                 record.update(r)
                 del r
 
-            # 计算总体指标
+            # 计算总体指标（原逻辑不变）
             intersection = np.sum(
                 [meters["intersection"] for _, meters in record.items()], axis=0
             )
             union = np.sum([meters["union"] for _, meters in record.items()], axis=0)
             target = np.sum([meters["target"] for _, meters in record.items()], axis=0)
+            # -------------------------- 4. 统计全局总点数和有效点数 --------------------------
+            global_total_points = sum([meters["total_points"] for _, meters in record.items()])
+            global_valid_points = sum([meters["valid_points"] for _, meters in record.items()])
+            logger.info(
+                f"[Global Debug] Total Samples: {len(record)}, "
+                f"Global Total Points: {global_total_points}, "
+                f"Global Valid Points: {global_valid_points}"
+            )
+            # -----------------------------------------------------------------------------------
 
             if self.cfg.data.test.type == "S3DISDataset":
                 torch.save(
@@ -314,14 +362,14 @@ class SemSegTester(TesterBase):
                     os.path.join(save_path, f"{self.test_loader.dataset.split}.pth"),
                 )
 
-            # 计算各类指标
+            # 计算各类指标（原逻辑不变）
             iou_class = intersection / (union + 1e-10)
             accuracy_class = intersection / (target + 1e-10)
             mIoU = np.mean(iou_class)
             mAcc = np.mean(accuracy_class)
             allAcc = sum(intersection) / (sum(target) + 1e-10)
 
-            # 保存结果到CSV
+            # 保存结果到CSV（修改表头和行数据，添加点数列）
             csv_path = os.path.join(save_path, "test_results.csv")
             num_classes = self.cfg.data.num_classes
             class_names = self.cfg.data.names  # 类别名称列表
@@ -335,8 +383,9 @@ class SemSegTester(TesterBase):
             with open(csv_path, mode='w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
 
-                # 表头
-                header = ["Scene_Name"]
+                # -------------------------- 5. CSV表头添加点数列 --------------------------
+                header = ["Scene_Name", "Total_Points", "Valid_Points"]  # 新增点数列
+                # -----------------------------------------------------------------------------------
                 # 每类IOU
                 for i in range(num_classes):
                     header.append(f"Class_{i}_IOU({class_names[i]})")
@@ -352,34 +401,35 @@ class SemSegTester(TesterBase):
                     inter = metrics["intersection"]
                     union = metrics["union"]
                     target = metrics["target"]
+                    # -------------------------- 6. 读取场景点数 --------------------------
+                    total_p = metrics["total_points"]
+                    valid_p = metrics["valid_points"]
+                    # -----------------------------------------------------------------------------------
 
-                    # 计算场景级指标
+                    # 计算场景级指标（原逻辑不变）
                     scene_iou = inter / (union + 1e-10)
                     scene_acc = inter / (target + 1e-10)
-
-                    # 计算场景mIoU（忽略无标注的类别）
                     valid_mask = union != 0
                     valid_iou = scene_iou[valid_mask]
                     scene_miou = np.mean(valid_iou) if valid_iou.size > 0 else 0.0
-
-                    # 计算场景整体准确率
                     scene_oa = np.sum(inter) / (np.sum(target) + 1e-10)
 
-                    # 构建行数据
-                    row = [scene_name]
+                    # -------------------------- 7. 行数据添加点数 --------------------------
+                    row = [scene_name, total_p, valid_p]  # 新增点数
+                    # -----------------------------------------------------------------------------------
                     row.extend([f"{x:.4f}" for x in scene_iou])
                     row.extend([f"{x:.4f}" for x in scene_acc])
                     row.extend([f"{scene_miou:.4f}", f"{scene_oa:.4f}"])
                     writer.writerow(row)
 
-                # 写入全局平均值
-                avg_row = ["Global_Average"]
+                # 写入全局平均值（点数列填全局统计值）
+                avg_row = ["Global_Average", global_total_points, global_valid_points]  # 新增全局点数
                 avg_row.extend([f"{x:.4f}" for x in iou_class])
                 avg_row.extend([f"{x:.4f}" for x in accuracy_class])
                 avg_row.extend([f"{mIoU:.4f}", f"{allAcc:.4f}"])
                 writer.writerow(avg_row)
 
-            # 打印日志
+            # 打印日志（原逻辑不变）
             logger.info(f"Test results saved to CSV: {csv_path}")
             logger.info(
                 "Val result: mIoU/mAcc/allAcc {:.4f}/{:.4f}/{:.4f}".format(
@@ -394,17 +444,11 @@ class SemSegTester(TesterBase):
 
     @staticmethod
     def collate_fn(batch):
-        """
-        针对性处理两种场景：
-        1. 处理test_loader的批次数据：返回列表（单一场景的完整数据，包含fragment_list）
-        2. 处理fragment_list的碎片数据：返回单个字典（供模型输入）
-        """
-        # 如果batch是碎片数据（每个元素是单个碎片的字典，且batch长度为1）
+        """原逻辑不变"""
         if len(batch) == 1 and isinstance(batch[0], dict) and "fragment_list" not in batch[0]:
             return batch[0]  # 返回单个碎片字典，供模型输入
         else:
             return batch  # 场景批次数据保持列表结构
-
 
 @TESTERS.register_module()
 class ClsTester(TesterBase):
