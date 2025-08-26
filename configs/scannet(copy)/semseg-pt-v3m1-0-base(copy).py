@@ -1,8 +1,8 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 2  # bs: total bs in all gpus
-num_worker = 0
+batch_size = 12  # bs: total bs in all gpus
+num_worker = 24
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
@@ -10,22 +10,21 @@ enable_amp = True
 # model settings
 model = dict(
     type="DefaultSegmentorV2",
-    num_classes=3,
+    num_classes=20,
     backbone_out_channels=64,
     backbone=dict(
-        type="hybridTM-v1m1-0",
+        type="PT-v3m1",
         in_channels=6,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
-        enc_depths=(1, 1, 1, 3, 1),
+        enc_depths=(2, 2, 2, 6, 2),
         enc_channels=(32, 64, 128, 256, 512),
         enc_num_head=(2, 4, 8, 16, 32),
         enc_patch_size=(1024, 1024, 1024, 1024, 1024),
-        dec_depths=(1, 1, 1, 1),
+        dec_depths=(2, 2, 2, 2),
         dec_channels=(64, 64, 128, 256),
         dec_num_head=(4, 4, 8, 16),
         dec_patch_size=(1024, 1024, 1024, 1024),
-        mamba_patch_size=(4096, 4096, 4096, 4096, 4096),
         mlp_ratio=4,
         qkv_bias=True,
         qk_scale=None,
@@ -53,7 +52,7 @@ model = dict(
 )
 
 # scheduler settings
-epoch = 100
+epoch = 800
 optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
 scheduler = dict(
     type="OneCycleLR",
@@ -67,51 +66,74 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
 dataset_type = "ScanNetDataset"
-data_root = "/root/autodl-tmp/data/data_scannet_tower"
+data_root = "data/scannet"
 
 data = dict(
-    num_classes=3,
+    num_classes=20,
     ignore_index=-1,
-    names=["class_0", "class_1", "class_2"],
+    names=[
+        "wall",
+        "floor",
+        "cabinet",
+        "bed",
+        "chair",
+        "sofa",
+        "table",
+        "door",
+        "window",
+        "bookshelf",
+        "picture",
+        "counter",
+        "desk",
+        "curtain",
+        "refridgerator",
+        "shower curtain",
+        "toilet",
+        "sink",
+        "bathtub",
+        "otherfurniture",
+    ],
     train=dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
         transform=[
-            # 1. 坐标几何增强（核心）
-            dict(type="CenterShift", apply_z=True),  # 坐标中心化（稳定几何基准）
-            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),  # 随机丢点，模拟遮挡
-            dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),  # 绕z轴旋转（适应场景方向差异）
-            dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.5),  # x/y轴微旋转（适应倾斜）
+            dict(type="CenterShift", apply_z=True),
+            dict(
+                type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            ),
+            # dict(type="RandomRotateTargetAngle", angle=(1/2, 1, 3/2), center=[0, 0, 0], axis="z", p=0.75),
+            dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
+            dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.5),
             dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="y", p=0.5),
-            dict(type="RandomScale", scale=[0.9, 1.1]),  # 尺度缩放（适应不同距离的点云）
-            dict(type="RandomFlip", p=0.5),  # 随机翻转（提升对称性鲁棒性）
-            dict(type="RandomJitter", sigma=0.005, clip=0.02),  # 坐标微抖动（抗噪声）
+            dict(type="RandomScale", scale=[0.9, 1.1]),
+            # dict(type="RandomShift", shift=[0.2, 0.2, 0.2]),
+            dict(type="RandomFlip", p=0.5),
+            dict(type="RandomJitter", sigma=0.005, clip=0.02),
 
-            # 2. 颜色增强（针对你的颜色特征）
-            dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),  # 自动对比度调整
-            dict(type="ChromaticTranslation", p=0.95, ratio=0.05),  # 颜色偏移（模拟光照变化）
-            dict(type="ChromaticJitter", p=0.95, std=0.05),  # 颜色抖动（增强鲁棒性）
 
-            # 3. 规整化与裁剪
+            dict(type="ElasticDistortion", distortion_params=[[0.2, 0.4], [0.8, 1.6]]),
+            dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
+            dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
+            dict(type="ChromaticJitter", p=0.95, std=0.05),
+            # dict(type="HueSaturationTranslation", hue_max=0.2, saturation_max=0.2),
+            # dict(type="RandomColorDrop", p=0.2, color_augment=0.0),
             dict(
                 type="GridSample",
                 grid_size=0.02,
                 hash_type="fnv",
                 mode="train",
-                return_grid_coord=True,  # 生成网格坐标，适配模型输入
+                return_grid_coord=True,
             ),
-            dict(type="SphereCrop", sample_rate=0.6, mode="random"),  # 随机裁剪（控制点数）
-            dict(type="SphereCrop", point_max=10000, mode="random"),  # 限制最大点数（防显存溢出）
-            dict(type="CenterShift", apply_z=False),  # 二次中心化（微调坐标）
-            dict(type="NormalizeColor"),  # 颜色归一化（将RGB映射到0-1范围）
-
-            # 4. 数据转换
-            dict(type="ToTensor"),  # 转为PyTorch张量
+            dict(type="SphereCrop", point_max=102400, mode="random"),
+            dict(type="CenterShift", apply_z=False),
+            dict(type="NormalizeColor"),
+            # dict(type="ShufflePoint"),
+            dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment"),  # 保留坐标、网格坐标、标签
-                feat_keys=("color", "normal",),  # 仅保留颜色特征（你的特征只有颜色）
+                keys=("coord", "grid_coord", "segment"),
+                feat_keys=("color", "normal"),
             ),
         ],
         test_mode=False,
@@ -168,7 +190,7 @@ data = dict(
                     feat_keys=("color", "normal"),
                 ),
             ],
-            # aug_transform=[
+                        # aug_transform=[
             #     [
             #         dict(
             #             type="RandomRotateTargetAngle",
@@ -286,7 +308,7 @@ data = dict(
             #         dict(type="RandomScale", scale=[1.05, 1.05]),
             #     ],
             #     [dict(type="RandomFlip", p=1)],
-            # ],
+            # ],            
             aug_transform=[
                 [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
             ],
