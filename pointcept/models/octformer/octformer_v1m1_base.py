@@ -23,7 +23,7 @@ except ImportError:
     Points = DummyClass
 
 try:
-    import dwconv
+    import torch_dwconv as dwconv
 except ImportError:
     dwconv = None
 
