@@ -1,18 +1,20 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 12  # bs: total bs in all gpus
+batch_size = 3  # bs: total bs in all gpus
 mix_prob = 0.8
-empty_cache = False
+empty_cache = True
 enable_amp = True
+num_worker = 0
 
 # model settings
 model = dict(
     type="DefaultSegmentor",
+    num_classes=3,
     backbone=dict(
         type="Swin3D-v1m1",
         in_channels=9,
-        num_classes=20,
+        num_classes=3,
         base_grid_size=0.02,
         depths=[2, 4, 9, 4, 4],
         channels=[48, 96, 192, 384, 384],
@@ -33,7 +35,7 @@ model = dict(
 )
 
 # scheduler settings
-epoch = 600
+epoch = 100
 optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
 scheduler = dict(
     type="OneCycleLR",
@@ -47,33 +49,12 @@ param_dicts = [dict(keyword="blocks", lr=0.0006)]
 
 # dataset settings
 dataset_type = "ScanNetDataset"
-data_root = "data/scannet"
+data_root = "/root/autodl-tmp/data/data_scannet_tower"
 
 data = dict(
-    num_classes=20,
+    num_classes=3,
     ignore_index=-1,
-    names=[
-        "wall",
-        "floor",
-        "cabinet",
-        "bed",
-        "chair",
-        "sofa",
-        "table",
-        "door",
-        "window",
-        "bookshelf",
-        "picture",
-        "counter",
-        "desk",
-        "curtain",
-        "refridgerator",
-        "shower curtain",
-        "toilet",
-        "sink",
-        "bathtub",
-        "otherfurniture",
-    ],
+    names=["class_0", "class_1", "class_2"],
     train=dict(
         type=dataset_type,
         split="train",
@@ -148,7 +129,7 @@ data = dict(
     ),
     test=dict(
         type=dataset_type,
-        split="val",
+        split="test",
         data_root=data_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
@@ -176,43 +157,9 @@ data = dict(
                     coord_feat_keys=("color", "normal"),
                 ),
             ],
+            #
             aug_transform=[
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[0],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    )
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[1 / 2],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    )
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[1],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    )
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[3 / 2],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    )
-                ],
+                [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
             ],
         ),
     ),
