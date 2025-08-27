@@ -9,7 +9,6 @@ num_worker = 0
 # model settings
 model = dict(
     type="DefaultSegmentor",
-    num_classes=3,
     backbone=dict(type="MinkUNet34C", in_channels=9, out_channels=20),
     criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=-1)],
 )
