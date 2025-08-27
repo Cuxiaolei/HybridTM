@@ -10,7 +10,6 @@ num_worker = 0
 # model settings
 model = dict(
     type="DefaultSegmentor",
-    num_classes=3,
     backbone=dict(
         type="Swin3D-v1m1",
         in_channels=9,
